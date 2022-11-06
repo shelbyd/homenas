@@ -81,6 +81,7 @@ impl FileSystem for Main {
 
         match node {
             1 => Ok(Attributes::dir()),
+            2 => Ok(Attributes::file()),
             _ => Err(libc::ENOENT),
         }
     }

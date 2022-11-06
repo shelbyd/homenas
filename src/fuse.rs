@@ -13,9 +13,18 @@ pub fn mount(
     while let Some(req) = session.next_request()? {
         let fs = Arc::clone(&fs);
         tokio::spawn(async move {
-            match process_operation(fs, req.operation().expect("always has operation")).await {
-                Ok(b) => req.reply(b),
-                Err(e) => req.reply_error(e),
+            let op = req.operation().expect("always has operation");
+            log::debug!("Got operation: {:?}", op);
+
+            match process_operation(fs, op).await {
+                Ok(b) => {
+                    log::debug!("Replying OK");
+                    req.reply(b)
+                },
+                Err(e) => {
+                    log::debug!("Replying with error: {}", e);
+                    req.reply_error(e)
+                },
             }
         });
     }
@@ -32,9 +41,10 @@ async fn process_operation<'r>(
             let entry = fs.lookup(op.parent(), op.name()).await?;
 
             let mut out = reply::EntryOut::default();
-            out.generation(0);
-            out.ttl_attr(Duration::from_secs(1));
+            out.ino(entry.node_id);
             file_attr(entry, out.attr());
+            out.ttl_attr(Duration::from_secs(1));
+            out.ttl_entry(Duration::from_secs(1));
 
             Ok(Box::new(out))
         }
@@ -64,7 +74,10 @@ async fn process_operation<'r>(
                     FileKind::Directory => libc::DT_DIR,
                 } as u32;
 
-                out.entry(entry.path.as_ref(), entry.node_id, kind, i as u64);
+                let is_full = out.entry(entry.path.as_ref(), entry.node_id, kind, i as u64);
+                if is_full {
+                    break;
+                }
             }
 
             Ok(Box::new(out))
@@ -77,19 +90,20 @@ async fn process_operation<'r>(
 }
 
 fn file_attr(entry: Attributes, attr: &mut reply::FileAttr) {
-    attr.mode(0o755);
+    attr.nlink(1);
+    attr.uid(unsafe { libc::getuid() });
+    attr.gid(unsafe { libc::getgid() });
 
     attr.ino(entry.node_id);
     attr.ctime(entry.created_since_epoch());
     attr.atime(entry.created_since_epoch());
     attr.mtime(entry.created_since_epoch());
-    attr.uid(unsafe { libc::getuid() });
-    attr.gid(unsafe { libc::getgid() });
 
     match entry.kind {
         KindedAttributes::File { size, .. } => {
             attr.size(size);
             attr.blocks(1);
+            attr.blksize(u32::MAX);
             attr.mode(libc::S_IFREG as u32 | 0o444);
         }
         KindedAttributes::Dir { .. } => {
