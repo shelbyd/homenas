@@ -15,6 +15,8 @@ mkdir $DIR_A || true
 mkdir $DIR_B || true
 mkdir $DIR_C || true
 
+sleep 0.1
+
 ./target/debug/homenas start $DIR_A \
   --listen-on 42000 --peers=127.0.0.1:42001 --peers=127.0.0.1:42002 &
 ./target/debug/homenas start $DIR_B \
@@ -30,6 +32,8 @@ HELLO="$DIR_A/hello.txt"
 TEXT="Hello World!"
 
 echo $TEXT > "$DIR_A/hello.txt"
+
+sleep 0.5
 
 FROM_B="$(cat "$DIR_B/hello.txt")"
 if [[ "$FROM_B" != "$TEXT" ]]; then

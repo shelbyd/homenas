@@ -2,6 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use structopt::*;
 
 #[derive(StructOpt, Debug)]
+#[allow(dead_code)] // TODO: Remove.
 pub struct StartCommand {
     /// Local port to listen for peer connections.
     #[structopt(long, default_value = "42000")]
@@ -17,7 +18,8 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
-        crate::fuse::mount(crate::file_system::Main::default(), &self.mount_path)?;
+        let fs = crate::file_system::Main::new();
+        crate::fuse::mount(fs, &self.mount_path)?;
         Ok(())
     }
 }

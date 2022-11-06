@@ -52,9 +52,16 @@ pub enum FileKind {
     Directory,
 }
 
-#[derive(Default)]
 pub struct Main {
     inner: RwLock<Inner>,
+}
+
+impl Main {
+    pub fn new() -> Self {
+        Main {
+            inner: RwLock::new(Inner::default()),
+        }
+    }
 }
 
 struct Inner {
@@ -75,7 +82,6 @@ impl Default for Inner {
                     },
                     kind: INodeKind::Directory(Directory {
                         children: maplit::hashmap! {},
-                        parent: None,
                     }),
                 },
             },
@@ -98,7 +104,6 @@ enum INodeKind {
 #[derive(Debug)]
 struct Directory {
     children: HashMap<OsString, u64>,
-    parent: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -202,7 +207,7 @@ impl FileSystem for Main {
         let mut write = self.inner.write().unwrap();
         let node = write.nodes.get_mut(&node).ok_or(libc::ENOENT)?;
 
-        let mut contents = match &mut node.kind {
+        let contents = match &mut node.kind {
             INodeKind::RegularFile(b) => b,
             _ => return Err(libc::EINVAL),
         };
@@ -245,7 +250,7 @@ impl FileSystem for Main {
         let attr = new_node.attributes.clone();
 
         let parent = write.nodes.get_mut(&parent).ok_or(libc::ENOENT)?;
-        let mut dir = match &mut parent.kind {
+        let dir = match &mut parent.kind {
             INodeKind::Directory(d) => d,
             _ => return Err(libc::ENOTDIR),
         };
