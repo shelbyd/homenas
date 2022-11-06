@@ -4,7 +4,9 @@ use structopt::*;
 
 mod commands;
 pub mod file_system;
+mod fs;
 mod fuse;
+mod object_store;
 
 #[derive(StructOpt, Debug)]
 pub struct Options {

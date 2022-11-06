@@ -13,5 +13,8 @@ libc = "0.2.137"
 log = "0.4.17"
 maplit = "1.0.2"
 polyfuse = "0.4.1"
+serde = { version = "1.0.147", features = ["derive"] }
+serde_cbor = "0.11.2"
 structopt = "0.3.26"
+thiserror = "1.0.37"
 tokio = { version = "1.21.2", features = ["rt", "rt-multi-thread", "macros"] }
