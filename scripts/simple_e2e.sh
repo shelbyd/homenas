@@ -5,7 +5,7 @@ set -euo pipefail
 DIR="/tmp/homenas_a"
 
 sleep 2
-cargo build
+cargo test
 
 ls -lah $DIR
 

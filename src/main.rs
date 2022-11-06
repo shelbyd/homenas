@@ -1,20 +1,6 @@
 use structopt::*;
 
-mod commands;
-mod file_system;
-mod fuse;
-
-#[derive(StructOpt, Debug)]
-pub struct Options {
-    /// Command to run.
-    #[structopt(subcommand)]
-    command: Command,
-}
-
-#[derive(StructOpt, Debug)]
-enum Command {
-    Start(commands::StartCommand),
-}
+use homenas::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -82,12 +82,11 @@ async fn process_operation<'r>(
 
             Ok(Box::new(out))
         }
-        Operation::Write(op, _data) => {
-            // TODO(shelbyd): Actually implement.
-            log::warn!("Pretending write worked");
+        Operation::Write(op, data) => {
+            let written = fs.write(op.ino(), op.offset(), data).await?;
 
             let mut out = reply::WriteOut::default();
-            out.size(op.size());
+            out.size(written);
 
             Ok(Box::new(out))
         }

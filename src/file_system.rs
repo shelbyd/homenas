@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::{c_int, OsStr, OsString},
+    io::BufRead,
     sync::RwLock,
     time::SystemTime,
 };
@@ -11,6 +12,8 @@ pub trait FileSystem {
     async fn get_attributes(&self, node: u64) -> Result<Attributes, c_int>;
     async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int>;
     async fn read(&self, node: u64, offset: u64, size: u32) -> Result<Vec<u8>, c_int>;
+    async fn write<T: BufRead + Send>(&self, node: u64, offset: u64, data: T)
+        -> Result<u32, c_int>;
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +83,11 @@ impl Default for Inner {
             next_node_id: 1,
             nodes: maplit::hashmap! {
                 1 => INode {
-                    attributes: Attributes::dir(),
+                    attributes: Attributes {
+                        created_at: std::time::UNIX_EPOCH,
+                        node_id: 1,
+                        kind: KindedAttributes::Dir {},
+                    },
                     kind: INodeKind::Directory(Directory {
                         children: maplit::hashmap! {
                             "hello.txt".into() => 2,
@@ -195,5 +202,34 @@ impl FileSystem for Main {
         let offset = &contents[offset as usize..];
         let len = core::cmp::min(offset.len(), size as usize);
         Ok(offset[..len].to_vec())
+    }
+
+    async fn write<T: BufRead + Send>(
+        &self,
+        node: u64,
+        offset: u64,
+        mut data: T,
+    ) -> Result<u32, c_int> {
+        log::debug!("write(node, offset): {:?}", (node, offset));
+
+        if offset != 0 {
+            log::warn!("Not Implemented: write(offset): {:?}", offset);
+            return Err(libc::ENOSYS);
+        }
+
+        let mut write = self.inner.write().unwrap();
+        let node = write.nodes.get_mut(&node).ok_or(libc::ENOENT)?;
+
+        let mut contents = match &mut node.kind {
+            INodeKind::RegularFile(b) => b,
+            _ => return Err(libc::EINVAL),
+        };
+
+        contents.clear();
+        let written = data
+            .read_to_end(contents)
+            .expect("read/write in memory suceeds");
+
+        Ok(written as u32)
     }
 }
