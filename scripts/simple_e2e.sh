@@ -3,11 +3,13 @@
 set -euxo pipefail
 
 DIR="/tmp/homenas_a"
-HELLO="$DIR/hello.txt"
 
 sleep 2
 cargo build
 
+ls -lah $DIR
+
+HELLO="$DIR/hello.txt"
 TEXT="Hello World!"
 
 echo $TEXT > $HELLO

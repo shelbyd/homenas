@@ -39,6 +39,12 @@ impl Attributes {
             kind: KindedAttributes::Dir {},
         }
     }
+
+    pub fn created_since_epoch(&self) -> std::time::Duration {
+        self.created_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("should always be after epoch")
+    }
 }
 
 pub struct ChildItem {
