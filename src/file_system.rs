@@ -8,7 +8,7 @@ pub trait FileSystem {
     async fn lookup(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int>;
     async fn get_attributes(&self, node: u64) -> Result<Attributes, c_int>;
     async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int>;
-    async fn read(&self, node: u64, offset: u64) -> Result<Vec<u8>, c_int>;
+    async fn read(&self, node: u64, offset: u64, size: u32) -> Result<Vec<u8>, c_int>;
 }
 
 #[derive(Debug)]
@@ -67,7 +67,7 @@ pub struct Main;
 #[async_trait::async_trait]
 impl FileSystem for Main {
     async fn lookup(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int> {
-        log::info!("lookup(parent, name): {:?}", (parent, name.to_str()));
+        log::debug!("lookup(parent, name): {:?}", (parent, name.to_str()));
 
         if parent == 1 && name.to_str() == Some("hello.txt") {
             return Ok(Attributes::file());
@@ -77,7 +77,7 @@ impl FileSystem for Main {
     }
 
     async fn get_attributes(&self, node: u64) -> Result<Attributes, c_int> {
-        log::info!("get_attributes(node): {:?}", node);
+        log::debug!("get_attributes(node): {:?}", node);
 
         match node {
             1 => Ok(Attributes::dir()),
@@ -87,7 +87,7 @@ impl FileSystem for Main {
     }
 
     async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int> {
-        log::info!("list_children(parent): {:?}", parent);
+        log::debug!("list_children(parent): {:?}", parent);
 
         if parent != 1 {
             return Err(libc::ENOENT);
@@ -112,13 +112,17 @@ impl FileSystem for Main {
         ])
     }
 
-    async fn read(&self, node: u64, offset: u64) -> Result<Vec<u8>, c_int> {
-        log::info!("read(node, offset): {:?}", (node, offset));
+    async fn read(&self, node: u64, offset: u64, size: u32) -> Result<Vec<u8>, c_int> {
+        log::debug!("read(node, offset): {:?}", (node, offset));
 
         if node != 2 {
             return Err(libc::ENOENT);
         }
 
-        Ok(b"Hello World!\n".to_vec())
+        let bytes = b"Hello World!\n";
+
+        let offset = &bytes[offset as usize..];
+        let len = core::cmp::min(offset.len(), size as usize);
+        Ok(offset[..len].to_vec())
     }
 }

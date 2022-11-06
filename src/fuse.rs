@@ -1,4 +1,4 @@
-use polyfuse::{bytes::Bytes, reply, Data, KernelConfig, Operation, Session};
+use polyfuse::{reply, Data, KernelConfig, Operation, Session};
 use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::file_system::{Attributes, FileKind, FileSystem, KindedAttributes};
@@ -20,11 +20,11 @@ pub fn mount(
                 Ok(b) => {
                     log::debug!("Replying OK");
                     req.reply(b)
-                },
+                }
                 Err(e) => {
                     log::debug!("Replying with error: {}", e);
                     req.reply_error(e)
-                },
+                }
             }
         });
     }
@@ -35,7 +35,7 @@ pub fn mount(
 async fn process_operation<'r>(
     fs: Arc<impl crate::file_system::FileSystem>,
     op: Operation<'r, Data<'r>>,
-) -> Result<Box<dyn Bytes>, libc::c_int> {
+) -> Result<Box<dyn polyfuse::bytes::Bytes>, libc::c_int> {
     match op {
         Operation::Lookup(op) => {
             let entry = fs.lookup(op.parent(), op.name()).await?;
@@ -82,6 +82,20 @@ async fn process_operation<'r>(
 
             Ok(Box::new(out))
         }
+        Operation::Write(op, _data) => {
+            // TODO(shelbyd): Actually implement.
+            log::warn!("Pretending write worked");
+
+            let mut out = reply::WriteOut::default();
+            out.size(op.size());
+
+            Ok(Box::new(out))
+        }
+        Operation::Read(op) => {
+            let read = fs.read(op.ino(), op.offset(), op.size()).await?;
+            Ok(Box::new(read))
+        }
+
         unhandled => {
             log::warn!("Unhandled operation: {:?}", unhandled);
             Err(libc::ENOSYS)
