@@ -2,7 +2,7 @@ use fuse::*;
 use std::{ffi::OsStr, sync::Arc};
 use time::Timespec;
 
-use crate::file_system::{Attributes, KindedAttributes};
+use crate::file_system::{Attributes, KindedAttributes, FileKind};
 
 pub struct UnixWrapper<F>(Arc<F>);
 
@@ -43,6 +43,37 @@ where
                 Ok(v) => v,
             };
             reply.attr(&Timespec::new(1, 0), &attr_to_unix(attrs));
+        });
+    }
+
+    fn readdir(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        self.inner(|inner| async move {
+            let items = match inner.list_children(ino).await {
+                Err(e) => return reply.error(e),
+                Ok(v) => v,
+            };
+
+            let to_skip = if offset == 0 { 0 } else { offset + 1 } as usize;
+            for (i, item) in items.iter().enumerate().skip(to_skip) {
+                let kind = match item.kind {
+                    FileKind::File => FileType::RegularFile,
+                    FileKind::Directory => FileType::Directory,
+                };
+
+                let is_full = reply.add(item.node_id, i as i64, kind, &item.path);
+                if is_full {
+                    break;
+                }
+            }
+
+            reply.ok();
         });
     }
 }

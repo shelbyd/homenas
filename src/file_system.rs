@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_int, OsStr},
+    ffi::{c_int, OsStr, OsString},
     time::SystemTime,
 };
 
@@ -7,6 +7,7 @@ use std::{
 pub trait FileSystem {
     async fn lookup(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int>;
     async fn get_attributes(&self, node: u64) -> Result<Attributes, c_int>;
+    async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int>;
 }
 
 pub struct Attributes {
@@ -39,6 +40,17 @@ impl Attributes {
     }
 }
 
+pub struct ChildItem {
+    pub node_id: u64,
+    pub kind: FileKind,
+    pub path: OsString,
+}
+
+pub enum FileKind {
+    File,
+    Directory,
+}
+
 pub struct Main;
 
 #[async_trait::async_trait]
@@ -60,5 +72,31 @@ impl FileSystem for Main {
             1 => Ok(Attributes::dir()),
             _ => Err(libc::ENOENT),
         }
+    }
+
+    async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int> {
+        log::info!("list_children(parent): {:?}", parent);
+
+        if parent != 1 {
+            return Err(libc::ENOENT);
+        }
+
+        Ok(vec![
+            ChildItem {
+                node_id: 1,
+                kind: FileKind::Directory,
+                path: ".".into(),
+            },
+            ChildItem {
+                node_id: 1,
+                kind: FileKind::Directory,
+                path: "..".into(),
+            },
+            ChildItem {
+                node_id: 2,
+                kind: FileKind::File,
+                path: "hello.txt".into(),
+            },
+        ])
     }
 }
