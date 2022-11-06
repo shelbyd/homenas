@@ -11,6 +11,7 @@ pub trait FileSystem {
     async fn read(&self, node: u64, offset: u64) -> Result<Vec<u8>, c_int>;
 }
 
+#[derive(Debug)]
 pub struct Attributes {
     pub created_at: SystemTime,
     pub node_id: u64,
@@ -18,6 +19,7 @@ pub struct Attributes {
     pub kind: KindedAttributes,
 }
 
+#[derive(Debug)]
 pub enum KindedAttributes {
     File { size: u64 },
     Dir {},
@@ -47,12 +49,14 @@ impl Attributes {
     }
 }
 
+#[derive(Debug)]
 pub struct ChildItem {
     pub node_id: u64,
     pub kind: FileKind,
     pub path: OsString,
 }
 
+#[derive(Debug)]
 pub enum FileKind {
     File,
     Directory,
