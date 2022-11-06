@@ -1,3 +1,5 @@
+#![feature(map_try_insert)]
+
 use structopt::*;
 
 mod commands;

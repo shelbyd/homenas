@@ -94,6 +94,25 @@ async fn process_operation<'r>(
             let read = fs.read(op.ino(), op.offset(), op.size()).await?;
             Ok(Box::new(read))
         }
+        Operation::Mknod(op) => {
+            match node_type(op.mode())? {
+                FileKind::File => {
+                    let entry = fs.create_file(op.parent(), op.name()).await?;
+
+                    let mut out = reply::EntryOut::default();
+                    out.ino(entry.node_id);
+                    file_attr(entry, out.attr());
+                    out.ttl_attr(Duration::from_secs(1));
+                    out.ttl_entry(Duration::from_secs(1));
+
+                    Ok(Box::new(out))
+                }
+                file_type => {
+                    log::warn!("Unhandled operation: Mknod {:?}", file_type);
+                    Err(libc::ENOSYS)
+                }
+            }
+        }
 
         unhandled => {
             log::warn!("Unhandled operation: {:?}", unhandled);
@@ -123,4 +142,12 @@ fn file_attr(entry: Attributes, attr: &mut reply::FileAttr) {
             attr.mode(libc::S_IFDIR as u32 | 0o555);
         }
     }
+}
+
+fn node_type(mode: u32) -> Result<FileKind, libc::c_int> {
+    if mode & libc::S_IFREG > 0 {
+        return Ok(FileKind::File);
+    }
+
+    Err(libc::ENOSYS)
 }

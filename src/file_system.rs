@@ -14,6 +14,7 @@ pub trait FileSystem {
     async fn read(&self, node: u64, offset: u64, size: u32) -> Result<Vec<u8>, c_int>;
     async fn write<T: BufRead + Send>(&self, node: u64, offset: u64, data: T)
         -> Result<u32, c_int>;
+    async fn create_file(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int>;
 }
 
 #[derive(Debug, Clone)]
@@ -31,22 +32,6 @@ pub enum KindedAttributes {
 }
 
 impl Attributes {
-    fn file() -> Self {
-        Attributes {
-            created_at: std::time::UNIX_EPOCH,
-            node_id: 2,
-            kind: KindedAttributes::File { size: 13 },
-        }
-    }
-
-    fn dir() -> Self {
-        Attributes {
-            created_at: std::time::UNIX_EPOCH,
-            node_id: 1,
-            kind: KindedAttributes::Dir {},
-        }
-    }
-
     pub fn created_since_epoch(&self) -> std::time::Duration {
         self.created_at
             .duration_since(std::time::UNIX_EPOCH)
@@ -80,7 +65,7 @@ struct Inner {
 impl Default for Inner {
     fn default() -> Self {
         Inner {
-            next_node_id: 1,
+            next_node_id: 2,
             nodes: maplit::hashmap! {
                 1 => INode {
                     attributes: Attributes {
@@ -89,31 +74,28 @@ impl Default for Inner {
                         kind: KindedAttributes::Dir {},
                     },
                     kind: INodeKind::Directory(Directory {
-                        children: maplit::hashmap! {
-                            "hello.txt".into() => 2,
-                        },
+                        children: maplit::hashmap! {},
                         parent: None,
                     }),
-                },
-                2 => INode {
-                    attributes: Attributes::file(),
-                    kind: INodeKind::RegularFile(b"Hello World!\n".to_vec()),
                 },
             },
         }
     }
 }
 
+#[derive(Debug)]
 struct INode {
     attributes: Attributes,
     kind: INodeKind,
 }
 
+#[derive(Debug)]
 enum INodeKind {
     RegularFile(Vec<u8>),
     Directory(Directory),
 }
 
+#[derive(Debug)]
 struct Directory {
     children: HashMap<OsString, u64>,
     parent: Option<u64>,
@@ -230,6 +212,45 @@ impl FileSystem for Main {
             .read_to_end(contents)
             .expect("read/write in memory suceeds");
 
+        match &mut node.attributes.kind {
+            KindedAttributes::File { size, .. } => {
+                *size = written as u64;
+            }
+            _ => unreachable!(),
+        }
+
         Ok(written as u32)
+    }
+
+    async fn create_file(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int> {
+        log::debug!("create_file(parent, name): {:?}", (parent, name.to_str()));
+
+        let mut write = self.inner.write().unwrap();
+
+        let new_node_id = write.next_node_id;
+        write.next_node_id += 1;
+
+        let new_node = INode {
+            attributes: Attributes {
+                created_at: SystemTime::now(),
+                node_id: new_node_id,
+                kind: KindedAttributes::File { size: 0 },
+            },
+            kind: INodeKind::RegularFile(Vec::new()),
+        };
+        let new_node = write.nodes.try_insert(new_node_id, new_node).expect("already had node with id");
+        let attr = new_node.attributes.clone();
+
+        let parent = write.nodes.get_mut(&parent).ok_or(libc::ENOENT)?;
+        let mut dir = match &mut parent.kind {
+            INodeKind::Directory(d) => d,
+            _ => return Err(libc::ENOTDIR),
+        };
+
+        dir.children
+            .try_insert(name.to_owned(), new_node_id)
+            .map_err(|_| libc::EEXIST)?;
+
+        Ok(attr)
     }
 }
