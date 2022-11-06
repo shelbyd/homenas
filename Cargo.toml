@@ -1,0 +1,8 @@
+[package]
+name = "homenas"
+version = "0.1.0"
+edition = "2021"
+authors = ["Shelby Doolittle <shelby@shelbyd.com>"]
+description = "A software NAS optimized for running at home."
+
+[dependencies]
