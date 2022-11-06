@@ -2,7 +2,7 @@ use fuse::*;
 use std::{ffi::OsStr, sync::Arc};
 use time::Timespec;
 
-use crate::file_system::{Attributes, KindedAttributes, FileKind};
+use crate::file_system::{Attributes, FileKind, KindedAttributes};
 
 pub struct UnixWrapper<F>(Arc<F>);
 
@@ -74,6 +74,23 @@ where
             }
 
             reply.ok();
+        });
+    }
+
+    fn read(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        _size: u32,
+        reply: ReplyData,
+    ) {
+        self.inner(|inner| async move {
+            match inner.read(ino, offset as u64).await {
+                Err(e) => reply.error(e),
+                Ok(read) => reply.data(&read),
+            }
         });
     }
 }

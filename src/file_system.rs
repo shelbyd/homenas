@@ -8,6 +8,7 @@ pub trait FileSystem {
     async fn lookup(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int>;
     async fn get_attributes(&self, node: u64) -> Result<Attributes, c_int>;
     async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int>;
+    async fn read(&self, node: u64, offset: u64) -> Result<Vec<u8>, c_int>;
 }
 
 pub struct Attributes {
@@ -98,5 +99,15 @@ impl FileSystem for Main {
                 path: "hello.txt".into(),
             },
         ])
+    }
+
+    async fn read(&self, node: u64, offset: u64) -> Result<Vec<u8>, c_int> {
+        log::info!("read(node, offset): {:?}", (node, offset));
+
+        if node != 2 {
+            return Err(libc::ENOENT);
+        }
+
+        Ok(b"Hello World!\n".to_vec())
     }
 }
