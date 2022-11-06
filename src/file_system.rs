@@ -1,5 +1,7 @@
 use std::{
+    collections::HashMap,
     ffi::{c_int, OsStr, OsString},
+    sync::RwLock,
     time::SystemTime,
 };
 
@@ -11,7 +13,7 @@ pub trait FileSystem {
     async fn read(&self, node: u64, offset: u64, size: u32) -> Result<Vec<u8>, c_int>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Attributes {
     pub created_at: SystemTime,
     pub node_id: u64,
@@ -19,7 +21,7 @@ pub struct Attributes {
     pub kind: KindedAttributes,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum KindedAttributes {
     File { size: u64 },
     Dir {},
@@ -62,38 +64,107 @@ pub enum FileKind {
     Directory,
 }
 
-pub struct Main;
+#[derive(Default)]
+pub struct Main {
+    inner: RwLock<Inner>,
+}
+
+struct Inner {
+    next_node_id: u64,
+    nodes: HashMap<u64, INode>,
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Inner {
+            next_node_id: 1,
+            nodes: maplit::hashmap! {
+                1 => INode {
+                    attributes: Attributes::dir(),
+                    kind: INodeKind::Directory(Directory {
+                        children: maplit::hashmap! {
+                            "hello.txt".into() => 2,
+                        },
+                        parent: None,
+                    }),
+                },
+                2 => INode {
+                    attributes: Attributes::file(),
+                    kind: INodeKind::RegularFile(b"Hello World!\n".to_vec()),
+                },
+            },
+        }
+    }
+}
+
+struct INode {
+    attributes: Attributes,
+    kind: INodeKind,
+}
+
+enum INodeKind {
+    RegularFile(Vec<u8>),
+    Directory(Directory),
+}
+
+struct Directory {
+    children: HashMap<OsString, u64>,
+    parent: Option<u64>,
+}
 
 #[async_trait::async_trait]
 impl FileSystem for Main {
     async fn lookup(&self, parent: u64, name: &OsStr) -> Result<Attributes, c_int> {
         log::debug!("lookup(parent, name): {:?}", (parent, name.to_str()));
 
-        if parent == 1 && name.to_str() == Some("hello.txt") {
-            return Ok(Attributes::file());
-        }
+        let read = self.inner.read().unwrap();
 
-        Err(libc::ENOENT)
+        let node = read.nodes.get(&parent).ok_or(libc::ENOENT)?;
+        let child_id = match &node.kind {
+            INodeKind::Directory(dir) => dir.children.get(name).ok_or(libc::ENOENT)?,
+            _ => return Err(libc::ENOTDIR),
+        };
+
+        let child = read
+            .nodes
+            .get(&child_id)
+            .expect("should have child if parent knows");
+        Ok(child.attributes.clone())
     }
 
     async fn get_attributes(&self, node: u64) -> Result<Attributes, c_int> {
         log::debug!("get_attributes(node): {:?}", node);
 
-        match node {
-            1 => Ok(Attributes::dir()),
-            2 => Ok(Attributes::file()),
-            _ => Err(libc::ENOENT),
-        }
+        let read = self.inner.read().unwrap();
+        let node = read.nodes.get(&node).ok_or(libc::ENOENT)?;
+        Ok(node.attributes.clone())
     }
 
     async fn list_children(&self, parent: u64) -> Result<Vec<ChildItem>, c_int> {
         log::debug!("list_children(parent): {:?}", parent);
 
-        if parent != 1 {
-            return Err(libc::ENOENT);
-        }
+        let read = self.inner.read().unwrap();
+        let parent = read.nodes.get(&parent).ok_or(libc::ENOENT)?;
 
-        Ok(vec![
+        let children = match &parent.kind {
+            INodeKind::Directory(dir) => &dir.children,
+            _ => return Err(libc::ENOTDIR),
+        };
+
+        let children_entries = children.iter().map(|(path, id)| {
+            let child = read.nodes.get(&id).expect("parent has dead child link");
+            let kind = match child.kind {
+                INodeKind::RegularFile(_) => FileKind::File,
+                INodeKind::Directory(_) => FileKind::Directory,
+            };
+            ChildItem {
+                node_id: *id,
+                kind,
+                path: path.into(),
+            }
+        });
+
+        Ok([
             ChildItem {
                 node_id: 1,
                 kind: FileKind::Directory,
@@ -104,24 +175,24 @@ impl FileSystem for Main {
                 kind: FileKind::Directory,
                 path: "..".into(),
             },
-            ChildItem {
-                node_id: 2,
-                kind: FileKind::File,
-                path: "hello.txt".into(),
-            },
-        ])
+        ]
+        .into_iter()
+        .chain(children_entries)
+        .collect())
     }
 
     async fn read(&self, node: u64, offset: u64, size: u32) -> Result<Vec<u8>, c_int> {
         log::debug!("read(node, offset): {:?}", (node, offset));
 
-        if node != 2 {
-            return Err(libc::ENOENT);
-        }
+        let read = self.inner.read().unwrap();
+        let node = read.nodes.get(&node).ok_or(libc::ENOENT)?;
 
-        let bytes = b"Hello World!\n";
+        let contents = match &node.kind {
+            INodeKind::RegularFile(v) => v,
+            _ => return Err(libc::EINVAL),
+        };
 
-        let offset = &bytes[offset as usize..];
+        let offset = &contents[offset as usize..];
         let len = core::cmp::min(offset.len(), size as usize);
         Ok(offset[..len].to_vec())
     }

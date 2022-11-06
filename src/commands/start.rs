@@ -9,7 +9,7 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
-        crate::fuse::mount(crate::file_system::Main, &self.mount_path)?;
+        crate::fuse::mount(crate::file_system::Main::default(), &self.mount_path)?;
         Ok(())
     }
 }
