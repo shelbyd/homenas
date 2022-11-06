@@ -94,25 +94,23 @@ async fn process_operation<'r>(
             let read = fs.read(op.ino(), op.offset(), op.size()).await?;
             Ok(Box::new(read))
         }
-        Operation::Mknod(op) => {
-            match node_type(op.mode())? {
-                FileKind::File => {
-                    let entry = fs.create_file(op.parent(), op.name()).await?;
+        Operation::Mknod(op) => match node_type(op.mode())? {
+            FileKind::File => {
+                let entry = fs.create_file(op.parent(), op.name()).await?;
 
-                    let mut out = reply::EntryOut::default();
-                    out.ino(entry.node_id);
-                    file_attr(entry, out.attr());
-                    out.ttl_attr(Duration::from_secs(1));
-                    out.ttl_entry(Duration::from_secs(1));
+                let mut out = reply::EntryOut::default();
+                out.ino(entry.node_id);
+                file_attr(entry, out.attr());
+                out.ttl_attr(Duration::from_secs(1));
+                out.ttl_entry(Duration::from_secs(1));
 
-                    Ok(Box::new(out))
-                }
-                file_type => {
-                    log::warn!("Unhandled operation: Mknod {:?}", file_type);
-                    Err(libc::ENOSYS)
-                }
+                Ok(Box::new(out))
             }
-        }
+            file_type => {
+                log::warn!("Unhandled operation: Mknod {:?}", file_type);
+                Err(libc::ENOSYS)
+            }
+        },
 
         unhandled => {
             log::warn!("Unhandled operation: {:?}", unhandled);

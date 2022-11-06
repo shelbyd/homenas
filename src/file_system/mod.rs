@@ -238,7 +238,10 @@ impl FileSystem for Main {
             },
             kind: INodeKind::RegularFile(Vec::new()),
         };
-        let new_node = write.nodes.try_insert(new_node_id, new_node).expect("already had node with id");
+        let new_node = write
+            .nodes
+            .try_insert(new_node_id, new_node)
+            .expect("already had node with id");
         let attr = new_node.attributes.clone();
 
         let parent = write.nodes.get_mut(&parent).ok_or(libc::ENOENT)?;
