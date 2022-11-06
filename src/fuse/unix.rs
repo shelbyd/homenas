@@ -2,6 +2,8 @@ use fuse::*;
 use std::{ffi::OsStr, sync::Arc};
 use time::Timespec;
 
+use crate::file_system::{Attributes, KindedAttributes};
+
 pub struct UnixWrapper<F>(Arc<F>);
 
 impl<F> UnixWrapper<F> {
@@ -45,24 +47,34 @@ where
     }
 }
 
-fn attr_to_unix(attrs: crate::file_system::Attributes) -> FileAttr {
+fn attr_to_unix(attrs: Attributes) -> FileAttr {
     let passed = attrs
         .created_at
         .duration_since(std::time::UNIX_EPOCH)
         .expect("should always be after epoch");
     let create_time = Timespec::new(passed.as_secs() as i64, passed.subsec_nanos() as i32);
 
+    let size = match attrs.kind {
+        KindedAttributes::File { size, .. } => size,
+        KindedAttributes::Dir { .. } => 0,
+    };
+
+    let kind = match attrs.kind {
+        KindedAttributes::File { .. } => FileType::RegularFile,
+        KindedAttributes::Dir { .. } => FileType::Directory,
+    };
+
     // TODO(shelbyd): Don't hardcode these values.
     FileAttr {
         ino: attrs.node_id,
-        size: attrs.size,
-        blocks: attrs.size / 256,
+        size: size,
+        blocks: size / 256,
         atime: create_time,
         mtime: create_time,
         ctime: create_time,
         crtime: create_time,
-        kind: FileType::RegularFile,
-        perm: 0o644,
+        kind,
+        perm: 0o755,
         nlink: 1,
         uid: 501,
         gid: 20,
