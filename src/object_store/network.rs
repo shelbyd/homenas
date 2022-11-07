@@ -38,8 +38,8 @@ where
         tokio::spawn(async move {
             let mut buf = vec![0; 3 * 1024 * 1024];
             loop {
-                let unhandled = match dispatcher.tick(&mut buf).await {
-                    Ok(Some(m)) => m,
+                let (from, message) = match dispatcher.tick(&mut buf).await {
+                    Ok(Some((from, m))) => (from, m),
                     Ok(None) => continue,
                     Err(e) => {
                         log::error!("{}", e);
@@ -47,8 +47,27 @@ where
                     }
                 };
 
-                let clone = Arc::clone(&this_for_task);
-                tokio::spawn(async move { clone.receive(unhandled).await });
+                let this = Arc::clone(&this_for_task);
+                let dispatcher = Arc::clone(&dispatcher);
+                tokio::spawn(async move {
+                    match message {
+                        Message::Event(e) => this.event(e).await,
+                        Message::Request(id, req) => {
+                            let resp = this.request(req).await;
+                            let serialized = resp.map(|resp| cbor_ser(&resp));
+
+                            if let Err(e) = dispatcher
+                                .send(from, Message::Response(id, serialized))
+                                .await
+                            {
+                                log::error!("{}", e);
+                            }
+                        }
+                        Message::Response(id, m) => {
+                            log::warn!("Unexpected response: {:?}", (from, id, m));
+                        }
+                    }
+                });
             }
         });
 
@@ -67,11 +86,30 @@ where
     O: ObjectStore + Send + Sync,
     P: Peer + Send + Sync,
 {
-    async fn receive(&self, message: Message) {
-        match message {
-            Message::Event(Event::Set(k, v)) => self.backing.set(k, v).await,
-            m => {
-                log::warn!("Unhandled message: {:?}", m);
+    async fn event(&self, event: Event) {
+        match event {
+            Event::Set(k, v) => {
+                self.backing.set(k, v).await;
+            }
+
+            #[cfg_attr(debug_assertions, allow(unreachable_patterns))]
+            e => {
+                log::warn!("Unhandled event: {:?}", e);
+            }
+        }
+    }
+
+    async fn request(&self, req: Request) -> IoResult<Box<dyn erased_serde::Serialize + Send>> {
+        match req {
+            Request::Fetch(k) => {
+                let found = self.backing.get(&k).await;
+                Ok(Box::new(Fetch(found)))
+            }
+
+            #[cfg_attr(debug_assertions, allow(unreachable_patterns))]
+            r => {
+                log::warn!("Unhandled request: {:?}", r);
+                Err(IoError::Unimplemented)
             }
         }
     }
@@ -96,18 +134,22 @@ where
     }
 
     async fn get(&self, key: &str) -> Option<Vec<u8>> {
+        use futures::FutureExt;
+
         if let Some(v) = self.backing.get(key).await {
             return Some(v);
         }
 
-        let found = futures::future::select_ok(
-            self.peers
-                .iter()
-                .map(|p| p.request::<Fetch>(Request::Fetch(key.to_string()))),
-        )
-        .await;
-        if let Ok((found, _)) = found {
-            return Some(found.0);
+        if self.peers.len() > 0 {
+            let found = futures::future::select_ok(self.peers.iter().map(|p| {
+                p.request::<Fetch>(Request::Fetch(key.to_string()))
+                    .map(|response| response?.0.ok_or(IoError::NotFound))
+            }))
+            .await;
+
+            if let Ok((found, _)) = found {
+                return Some(found);
+            }
         }
 
         None
@@ -136,7 +178,7 @@ where
 pub enum Message {
     Event(Event),
     Request(u32, Request),
-    Response(u32, Vec<u8>),
+    Response(u32, Result<Vec<u8>, IoError>),
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -152,8 +194,8 @@ pub enum Request {
 mod response {
     use super::*;
 
-    #[derive(Serialize, Deserialize)]
-    pub struct Fetch(pub Vec<u8>);
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct Fetch(pub Option<Vec<u8>>);
 }
 
 // TODO(shelbyd): Can make private?
@@ -184,7 +226,7 @@ impl Peer for NetworkPeer {
 
 struct Dispatcher {
     socket: UdpSocket,
-    outstanding_requests: DashMap<(SocketAddr, u32), Sender<Vec<u8>>>,
+    outstanding_requests: DashMap<(SocketAddr, u32), Sender<IoResult<Vec<u8>>>>,
 }
 
 impl Dispatcher {
@@ -216,7 +258,7 @@ impl Dispatcher {
                 let data = data.map_err(|e| {
                     log::error!("{}", e);
                     IoError::Io
-                })?;
+                })??;
                 serde_cbor::from_slice(&data).map_err(|_| IoError::Parse)
             }
         }
@@ -228,22 +270,30 @@ impl Dispatcher {
         Ok(())
     }
 
-    async fn tick(&self, buf: &mut [u8]) -> anyhow::Result<Option<Message>> {
+    async fn tick(&self, buf: &mut [u8]) -> anyhow::Result<Option<(SocketAddr, Message)>> {
         let (amount, from) = self.socket.recv_from(buf).await?;
         let message = serde_cbor::from_slice(&buf[..amount])?;
 
         match message {
-            Message::Response(id, data) => {
+            Message::Response(id, result) => {
                 if let Some((_, sender)) = self.outstanding_requests.remove(&(from, id)) {
-                    let _disconnected = sender.send(data);
+                    let _disconnected = sender.send(result);
                     Ok(None)
                 } else {
-                    Ok(Some(Message::Response(id, data)))
+                    Ok(Some((from, Message::Response(id, result))))
                 }
             }
-            m => Ok(Some(m)),
+            m => Ok(Some((from, m))),
         }
     }
+}
+
+fn cbor_ser(ser: &dyn erased_serde::Serialize) -> Vec<u8> {
+    let mut vec = Vec::new();
+    let cbor = &mut serde_cbor::Serializer::new(&mut vec);
+    let cbor = &mut <dyn erased_serde::Serializer>::erase(cbor);
+    ser.erased_serialize(cbor).unwrap();
+    vec
 }
 
 #[cfg(test)]
@@ -321,11 +371,8 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.receive(Message::Event(Event::Set(
-            "foo".to_string(),
-            b"bar".to_vec(),
-        )))
-        .await;
+        net.event(Event::Set("foo".to_string(), b"bar".to_vec()))
+            .await;
 
         assert_eq!(net.backing.get("foo").await, Some(b"bar".to_vec()));
     }
@@ -352,7 +399,7 @@ mod tests {
         peer.respond(|m| match m {
             Request::Fetch(key) => {
                 assert_eq!(&key, "foo");
-                Some(TestPeer::ser(Fetch(b"bar".to_vec())))
+                Some(TestPeer::ser(Fetch(Some(b"bar".to_vec()))))
             }
 
             #[allow(unreachable_patterns)]
@@ -379,5 +426,22 @@ mod tests {
             "foo".to_string(),
             b"bar".to_vec()
         ))));
+    }
+
+    #[tokio::test]
+    async fn fetch_request() {
+        let peer = TestPeer::default();
+
+        let mem = Memory::default();
+        mem.set("foo".to_string(), b"bar".to_vec()).await;
+
+        let net = Network::new_inner(mem, vec![&peer]);
+
+        assert_eq!(
+            net.request(Request::Fetch("foo".to_string()))
+                .await
+                .map(|ser| cbor_ser(&ser)),
+            Ok(serde_cbor::to_vec(&Fetch(Some(b"bar".to_vec()))).unwrap())
+        );
     }
 }

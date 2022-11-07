@@ -8,7 +8,7 @@ pub type NodeId = u64;
 
 pub type IoResult<T> = Result<T, IoError>;
 
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IoError {
     #[error("not found")]
     NotFound,

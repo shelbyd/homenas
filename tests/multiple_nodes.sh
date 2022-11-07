@@ -13,11 +13,11 @@ DIR_A="/tmp/homenas_a"
 DIR_B="/tmp/homenas_b"
 DIR_C="/tmp/homenas_c"
 
-mkdir $DIR_A || true
-mkdir $DIR_B || true
-mkdir $DIR_C || true
+rm -r $DIR_A; mkdir $DIR_A
+rm -r $DIR_B; mkdir $DIR_B
+rm -r $DIR_C; mkdir $DIR_C
 
-sleep 0.5
+sleep 0.1
 
 ./target/debug/homenas start $DIR_A \
   --listen-on 42000 --peers=127.0.0.1:42001 --peers=127.0.0.1:42002 &
@@ -26,9 +26,7 @@ sleep 0.5
 ./target/debug/homenas start $DIR_C \
   --listen-on 42002 --peers=127.0.0.1:42000 --peers=127.0.0.1:42001 &
 
-sleep 2
-
-ls -lah $DIR_A
+sleep 1
 
 HELLO="$DIR_A/hello.txt"
 TEXT="Hello World!"
@@ -37,12 +35,24 @@ echo $TEXT > "$DIR_A/hello.txt"
 
 sleep 0.5
 
+echo "Testing A"
+ls -lah $DIR_A
+FROM_A="$(cat "$DIR_A/hello.txt")"
+if [[ "$FROM_A" != "$TEXT" ]]; then
+  echo "Written file does not match expected from A"
+  echo "$FROM_A"
+fi
+
+echo "Testing B"
+ls -lah $DIR_B
 FROM_B="$(cat "$DIR_B/hello.txt")"
 if [[ "$FROM_B" != "$TEXT" ]]; then
   echo "Written file does not match expected from B"
   echo "$FROM_B"
 fi
 
+echo "Testing C"
+ls -lah $DIR_B
 FROM_C="$(cat "$DIR_C/hello.txt")"
 if [[ "$FROM_C" != "$TEXT" ]]; then
   echo "Written file does not match expected from C"
