@@ -156,6 +156,7 @@ where
     }
 
     async fn compare_exchange(&self, key: &str, current: Option<Vec<u8>>, new: Vec<u8>) -> bool {
+        // TODO(shelbyd): Maintain semantics.
         if !self
             .backing
             .compare_exchange(key, current, new.clone())

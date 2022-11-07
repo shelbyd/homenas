@@ -63,6 +63,7 @@ where
         (**self).get(key).await
     }
 
+    /// Currently does not implement actual compare_exchange semantics for all ObjectStores.
     async fn compare_exchange(&self, key: &str, current: Option<Vec<u8>>, new: Vec<u8>) -> bool {
         (**self).compare_exchange(key, current, new).await
     }
