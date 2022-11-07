@@ -21,6 +21,7 @@ pub enum IoError {
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub enum FileKind {
     File,
+    Directory,
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
@@ -32,6 +33,6 @@ pub struct Entry {
 
 impl Entry {
     pub fn created_since_epoch(&self) -> Duration {
-        unimplemented!("created_since_epoch");
+        Duration::default()
     }
 }

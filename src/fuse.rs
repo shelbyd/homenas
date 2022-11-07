@@ -54,15 +54,15 @@ where
 
             Ok(Box::new(out))
         }
-        // Operation::Getattr(op) => {
-        //     let entry = fs.get_attributes(op.ino()).await?;
-        //
-        //     let mut out = reply::AttrOut::default();
-        //     out.ttl(Duration::from_secs(1));
-        //     file_attr(entry, out.attr());
-        //
-        //     Ok(Box::new(out))
-        // }
+        Operation::Getattr(op) => {
+            let entry = fs.read_entry(op.ino()).await?;
+
+            let mut out = reply::AttrOut::default();
+            out.ttl(Duration::from_secs(1));
+            file_attr(entry, out.attr());
+
+            Ok(Box::new(out))
+        }
         Operation::Readdir(op) => {
             let entries = fs.list_children(op.ino()).await?;
 
@@ -77,7 +77,7 @@ where
             for (i, entry) in entry_offsets {
                 let kind = match entry.kind {
                     FileKind::File => libc::DT_REG,
-                    // FileKind::Directory => libc::DT_DIR,
+                    FileKind::Directory => libc::DT_DIR,
                 } as u32;
 
                 let is_full = out.entry(entry.name.as_ref(), entry.node_id, kind, i as u64);
