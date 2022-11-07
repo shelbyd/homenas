@@ -1,9 +1,10 @@
-#![allow(warnings)]
-
-use std::path::{Path, PathBuf};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use tokio::{
     fs::{self, *},
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
 use super::*;
@@ -14,30 +15,34 @@ pub struct FileSystem {
 }
 
 impl FileSystem {
-    pub fn new(paths: &[impl AsRef<Path>]) -> Self {
-        // Could use a non-empty list type.
-        assert_ne!(paths.len(), 0);
-        assert_eq!(paths.len(), 1);
-
+    pub fn new(path: impl AsRef<Path>) -> Self {
         FileSystem {
-            path: paths
-                .iter()
-                .map(|p| p.as_ref().to_path_buf())
-                .next()
-                .unwrap(),
+            path: path.as_ref().to_path_buf(),
         }
+    }
+
+    async fn writable_path(&self, key: &str) -> IoResult<PathBuf> {
+        let path = self.path.join(key);
+        fs::create_dir_all(path.parent().expect("keys are in directory")).await?;
+        Ok(path)
     }
 }
 
 #[async_trait::async_trait]
 impl ObjectStore for FileSystem {
     async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
-        todo!("set")
+        let path = self.writable_path(&key).await?;
+        fs::write(path, &value).await?;
+
+        Ok(())
     }
 
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        // fs::read(self.path.join(key)).await.ok()
-        todo!()
+        match fs::read(self.path.join(key)).await {
+            Ok(buf) => Ok(Some(buf)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn compare_exchange(
@@ -46,27 +51,151 @@ impl ObjectStore for FileSystem {
         current: Option<Vec<u8>>,
         new: Vec<u8>,
     ) -> IoResult<bool> {
-        // let path = self.path.join(key);
-        // fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        let mut file = match current {
+            None => {
+                let open = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(self.path.join(key))
+                    .await;
+                match open {
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => return Ok(false),
+                    Err(e) => return Err(e.into()),
+                    Ok(f) => f,
+                }
+            }
+            Some(current) => {
+                let open = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(self.path.join(key))
+                    .await;
+                match open {
+                    Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+                    Err(e) => return Err(e.into()),
+                    Ok(mut f) => {
+                        let mut contents = Vec::new();
+                        f.read_to_end(&mut contents).await?;
+                        if contents != current {
+                            return Ok(false);
+                        }
+                        f
+                    }
+                }
+            }
+        };
 
-        // let mut open = OpenOptions::new()
-        //     .read(true)
-        //     .write(true)
-        //     .create(true)
-        //     .open(self.path.join(key))
-        //     .await
-        //     .unwrap();
-
-        // let mut contents = Vec::new();
-        // open.read_to_end(&mut contents).await.unwrap();
-
-        // dbg!(contents);
-
-        todo!("compare_exchange")
+        file.set_len(0).await?;
+        file.rewind().await?;
+        file.write_all(&new).await?;
+        Ok(true)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::*;
+
+    fn bar() -> Vec<u8> {
+        b"bar".to_vec()
+    }
+
+    #[tokio::test]
+    async fn empty() {
+        let dir = tempdir().unwrap();
+        let fs = FileSystem::new(dir.path());
+
+        assert_eq!(fs.get("foo").await, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn set_has_get() {
+        let dir = tempdir().unwrap();
+        let fs = FileSystem::new(dir.path());
+
+        fs.set("foo".to_string(), bar()).await.unwrap();
+
+        assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+    }
+
+    #[tokio::test]
+    async fn set_with_slashes() {
+        let dir = tempdir().unwrap();
+        let fs = FileSystem::new(dir.path());
+
+        fs.set("foo/bar/baz".to_string(), bar()).await.unwrap();
+
+        assert_eq!(fs.get("foo/bar/baz").await, Ok(Some(bar())));
+    }
+
+    #[cfg(test)]
+    mod compare_exchange {
+        use super::*;
+
+        #[tokio::test]
+        async fn no_value() {
+            let dir = tempdir().unwrap();
+            let fs = FileSystem::new(dir.path());
+
+            assert_eq!(fs.compare_exchange("foo", None, bar()).await, Ok(true));
+            assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+        }
+
+        #[tokio::test]
+        async fn existing_value_with_none() {
+            let dir = tempdir().unwrap();
+            let fs = FileSystem::new(dir.path());
+
+            fs.set("foo".to_string(), bar()).await.unwrap();
+
+            assert_eq!(
+                fs.compare_exchange("foo", None, b"baz".to_vec()).await,
+                Ok(false)
+            );
+            assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+        }
+
+        #[tokio::test]
+        async fn no_value_with_some() {
+            let dir = tempdir().unwrap();
+            let fs = FileSystem::new(dir.path());
+
+            assert_eq!(
+                fs.compare_exchange("foo", Some(bar()), bar()).await,
+                Ok(false)
+            );
+            assert_eq!(fs.get("foo").await, Ok(None));
+        }
+
+        #[tokio::test]
+        async fn incorrect_value() {
+            let dir = tempdir().unwrap();
+            let fs = FileSystem::new(dir.path());
+
+            fs.set("foo".to_string(), bar()).await.unwrap();
+
+            assert_eq!(
+                fs.compare_exchange("foo", Some(b"baz".to_vec()), bar())
+                    .await,
+                Ok(false)
+            );
+            assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+        }
+
+        #[tokio::test]
+        async fn correct_some() {
+            let dir = tempdir().unwrap();
+            let fs = FileSystem::new(dir.path());
+
+            fs.set("foo".to_string(), bar()).await.unwrap();
+
+            assert_eq!(
+                fs.compare_exchange("foo", Some(bar()), b"baz".to_vec())
+                    .await,
+                Ok(true)
+            );
+            assert_eq!(fs.get("foo").await, Ok(Some(b"baz".to_vec())));
+        }
+    }
 }

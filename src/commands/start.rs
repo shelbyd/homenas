@@ -16,7 +16,7 @@ pub struct StartCommand {
 
     /// Directories to store data to. If empty, will only store in memory.
     #[structopt(long)]
-    backing_dirs: Vec<PathBuf>,
+    backing_dir: Option<PathBuf>,
 
     /// Where to mount the homenas directory.
     mount_path: PathBuf,
@@ -24,9 +24,9 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
-        let backing_store: Box<dyn ObjectStore> = match &self.backing_dirs[..] {
-            [] => Box::new(Memory::default()),
-            list => Box::new(FileSystem::new(list)),
+        let backing_store: Box<dyn ObjectStore> = match &self.backing_dir {
+            None => Box::new(Memory::default()),
+            Some(d) => Box::new(FileSystem::new(d)),
         };
 
         let network_store = Network::new(backing_store, self.listen_on, &self.peers).await?;

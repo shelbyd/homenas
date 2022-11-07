@@ -26,6 +26,23 @@ pub enum IoError {
     Io,
     #[error("parsing")]
     Parse,
+    #[error("uncategorized")]
+    Uncategorized,
+}
+
+// TODO(shelbyd): Delete and use std::io::Result.
+impl From<std::io::Error> for IoError {
+    fn from(e: std::io::Error) -> Self {
+        use std::io::ErrorKind::*;
+
+        match e.kind() {
+            NotFound => IoError::NotFound,
+            unhandled => {
+                log::warn!("unhandled IoError: {:?}", unhandled);
+                IoError::Uncategorized
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize, Clone)]

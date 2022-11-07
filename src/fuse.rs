@@ -166,5 +166,6 @@ fn libc_error(io: IoError) -> libc::c_int {
         IoError::Timeout => libc::ETIMEDOUT,
         IoError::Io => libc::EIO,
         IoError::Parse => libc::EIO,
+        IoError::Uncategorized => libc::EIO,
     }
 }

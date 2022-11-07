@@ -34,3 +34,7 @@ features = [
   "sync",
   "time",
 ]
+
+[dev-dependencies]
+lazy_static = "1.4.0"
+tempfile = "3.3.0"
