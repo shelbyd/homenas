@@ -12,6 +12,9 @@ pub type IoResult<T> = Result<T, IoError>;
 pub enum IoError {
     #[error("not found")]
     NotFound,
+
+    #[error("out of range")]
+    OutOfRange,
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
@@ -24,4 +27,8 @@ pub struct ChildItem {
     pub node_id: NodeId,
     pub name: OsString,
     pub kind: FileKind,
+}
+
+pub struct Entry {
+    pub node_id: NodeId,
 }
