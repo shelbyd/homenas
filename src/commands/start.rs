@@ -18,7 +18,9 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
-        let fs = crate::file_system::Main::new();
+        let mem_store = crate::object_store::Memory::default();
+        let fs = crate::fs::FileSystem::new(mem_store);
+
         crate::fuse::mount(fs, &self.mount_path)?;
         Ok(())
     }

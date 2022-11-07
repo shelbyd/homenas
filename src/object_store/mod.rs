@@ -1,6 +1,4 @@
-#[cfg(test)]
 pub mod memory;
-#[cfg(test)]
 pub use memory::*;
 
 // type Bytes = Vec<u8>;

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::ffi::OsString;
+use std::{ffi::OsString, time::Duration};
 
 mod file_system;
 pub use file_system::*;
@@ -12,9 +12,10 @@ pub type IoResult<T> = Result<T, IoError>;
 pub enum IoError {
     #[error("not found")]
     NotFound,
-
     #[error("out of range")]
     OutOfRange,
+    #[error("unimplemented")]
+    Unimplemented,
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
@@ -23,12 +24,14 @@ pub enum FileKind {
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize)]
-pub struct ChildItem {
+pub struct Entry {
     pub node_id: NodeId,
     pub name: OsString,
     pub kind: FileKind,
 }
 
-pub struct Entry {
-    pub node_id: NodeId,
+impl Entry {
+    pub fn created_since_epoch(&self) -> Duration {
+        unimplemented!("created_since_epoch");
+    }
 }
