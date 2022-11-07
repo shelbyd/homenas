@@ -12,7 +12,8 @@ pub trait ObjectStore {
     /// Update the value at the provided key. May retry until successful.
     async fn update<R, F>(&self, key: String, f: F) -> (Vec<u8>, R)
     where
-        F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send;
+        F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
+        R: Send;
 }
 
 #[async_trait::async_trait]
@@ -30,6 +31,7 @@ where
     async fn update<R, F>(&self, key: String, f: F) -> (Vec<u8>, R)
     where
         F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
+        R: Send,
     {
         (**self).update(key, f).await
     }

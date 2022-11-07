@@ -72,7 +72,7 @@ where
             Message::Set(k, v) => self.backing.set(k, v).await,
             m => {
                 log::warn!("Unhandled message: {:?}", m);
-            },
+            }
         }
     }
 }
@@ -85,7 +85,7 @@ where
 {
     async fn set(&self, key: String, value: Vec<u8>) {
         for peer in &self.peers {
-            peer.send(Message::Set(key.clone(), value.clone()));
+            peer.send(Message::Set(key.clone(), value.clone())).await;
         }
         self.backing.set(key, value).await;
     }
@@ -108,11 +108,12 @@ where
     async fn update<R, F>(&self, key: String, f: F) -> (Vec<u8>, R)
     where
         F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
+        R: Send,
     {
         let (bytes, r) = self.backing.update(key.clone(), f).await;
 
         for peer in &self.peers {
-            peer.send(Message::Set(key.clone(), bytes.clone()));
+            peer.send(Message::Set(key.clone(), bytes.clone())).await;
         }
 
         (bytes, r)
@@ -141,7 +142,7 @@ mod response {
 // TODO(shelbyd): Can make private?
 #[async_trait::async_trait]
 pub trait Peer {
-    fn send(&self, message: Message);
+    async fn send(&self, message: Message);
 
     async fn request<R: DeserializeOwned>(&self, req: Request) -> IoResult<R>;
 }
@@ -153,8 +154,10 @@ pub struct NetworkPeer {
 
 #[async_trait::async_trait]
 impl Peer for NetworkPeer {
-    fn send(&self, _message: Message) {
-        todo!()
+    async fn send(&self, message: Message) {
+        if let Err(e) = self.dispatcher.send(self.addr, message).await {
+            log::error!("Error sending message: {}", e);
+        }
     }
 
     async fn request<R: DeserializeOwned>(&self, req: Request) -> IoResult<R> {
@@ -181,11 +184,12 @@ impl Dispatcher {
             }
         };
 
-        let req = serde_cbor::to_vec(&Message::Request(id, req)).map_err(|_| IoError::Parse)?;
-        self.socket.send_to(&req, addr).await.map_err(|e| {
-            log::error!("{}", e);
-            IoError::Io
-        })?;
+        self.send(addr, Message::Request(id, req))
+            .await
+            .map_err(|e| {
+                log::error!("{}", e);
+                IoError::Io
+            })?;
 
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
@@ -199,6 +203,12 @@ impl Dispatcher {
                 serde_cbor::from_slice(&data).map_err(|_| IoError::Parse)
             }
         }
+    }
+
+    async fn send(&self, addr: SocketAddr, message: Message) -> anyhow::Result<()> {
+        let message = serde_cbor::to_vec(&message)?;
+        self.socket.send_to(&message, addr).await?;
+        Ok(())
     }
 
     async fn tick(&self, buf: &mut [u8]) -> anyhow::Result<Option<Message>> {
@@ -248,7 +258,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl<'a> Peer for &'a TestPeer {
-        fn send(&self, message: Message) {
+        async fn send(&self, message: Message) {
             self.inc.lock().unwrap().push(message)
         }
 
