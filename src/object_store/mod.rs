@@ -1,7 +1,8 @@
 pub mod memory;
 pub use memory::*;
 
-// type Bytes = Vec<u8>;
+pub mod network;
+pub use network::*;
 
 #[async_trait::async_trait]
 pub trait ObjectStore {
@@ -9,7 +10,7 @@ pub trait ObjectStore {
     async fn get(&self, key: &str) -> Option<Vec<u8>>;
 
     /// Update the value at the provided key. May retry until successful.
-    async fn update<R, F>(&self, key: String, mut f: F) -> R
+    async fn update<R, F>(&self, key: String, mut f: F) -> (Vec<u8>, R)
     where
         F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send;
 }

@@ -17,14 +17,14 @@ impl ObjectStore for Memory {
         self.inner.read().unwrap().get(key).cloned()
     }
 
-    async fn update<R, F>(&self, key: String, mut f: F) -> R
+    async fn update<R, F>(&self, key: String, mut f: F) -> (Vec<u8>, R)
     where
         F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
     {
         let mut write = self.inner.write().unwrap();
         let ref_mut = write.get(&key);
         let (new_data, r) = f(ref_mut);
-        write.insert(key, new_data);
-        r
+        write.insert(key, new_data.clone());
+        (new_data, r)
     }
 }

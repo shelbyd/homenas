@@ -115,7 +115,8 @@ impl<O: ObjectStore> FileSystem<O> {
                     .unwrap_or(2);
                 (serde_cbor::to_vec(&(next + 1)).unwrap(), next)
             })
-            .await)
+            .await
+            .1)
     }
 
     pub async fn write<B: BufRead>(&self, node: NodeId, offset: u64, mut data: B) -> IoResult<u32> {

@@ -19,7 +19,10 @@ pub struct StartCommand {
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
         let mem_store = crate::object_store::Memory::default();
-        let fs = crate::fs::FileSystem::new(mem_store);
+        let network_store =
+            crate::object_store::Network::new(mem_store, self.listen_on, &self.peers).await?;
+
+        let fs = crate::fs::FileSystem::new(network_store);
 
         crate::fuse::mount(fs, &self.mount_path)?;
         Ok(())
