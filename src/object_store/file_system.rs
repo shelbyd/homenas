@@ -51,13 +51,15 @@ impl ObjectStore for FileSystem {
         current: Option<Vec<u8>>,
         new: Vec<u8>,
     ) -> IoResult<bool> {
+        let path = self.writable_path(&key).await?;
         let mut file = match current {
             None => {
                 let open = OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(self.path.join(key))
+                    .open(path)
                     .await;
+
                 match open {
                     Err(e) if e.kind() == ErrorKind::AlreadyExists => return Ok(false),
                     Err(e) => return Err(e.into()),
@@ -65,11 +67,8 @@ impl ObjectStore for FileSystem {
                 }
             }
             Some(current) => {
-                let open = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(self.path.join(key))
-                    .await;
+                let open = OpenOptions::new().read(true).write(true).open(path).await;
+
                 match open {
                     Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
                     Err(e) => return Err(e.into()),

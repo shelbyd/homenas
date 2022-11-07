@@ -38,7 +38,7 @@ impl From<std::io::Error> for IoError {
         match e.kind() {
             NotFound => IoError::NotFound,
             unhandled => {
-                log::warn!("unhandled IoError: {:?}", unhandled);
+                log::warn!("Unhandled std::io::ErrorKind: {:?}", unhandled);
                 IoError::Uncategorized
             }
         }
