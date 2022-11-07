@@ -32,7 +32,7 @@ impl<O: ObjectStore> FileSystem<O> {
     pub async fn read_entry(&self, node: NodeId) -> IoResult<Entry> {
         log::debug!("read_entry(node): {:?}", node);
 
-        let read = match self.store.get(&format!("file/{}.meta", node)).await {
+        let read = match self.store.get(&format!("file/{}.meta", node)).await? {
             Some(r) => r,
             None if node == 1 => {
                 return Ok(Entry {
@@ -52,9 +52,7 @@ impl<O: ObjectStore> FileSystem<O> {
                 format!("file/{}.meta", entry.node_id),
                 serde_cbor::to_vec(&entry).unwrap(),
             )
-            .await;
-
-        Ok(())
+            .await
     }
 
     pub async fn list_children(&self, node: NodeId) -> IoResult<Vec<Entry>> {
@@ -81,7 +79,7 @@ impl<O: ObjectStore> FileSystem<O> {
         let new_node_id = self.get_next_node_id().await?;
 
         let file_location = format!("file/{}", new_node_id);
-        self.store.set(file_location, Vec::new()).await;
+        self.store.set(file_location, Vec::new()).await?;
 
         let file_entry = Entry {
             kind: DetailedKind::File(FileData { size: 0 }),
@@ -114,7 +112,7 @@ impl<O: ObjectStore> FileSystem<O> {
                     .unwrap_or(2);
                 (serde_cbor::to_vec(&(next + 1)).unwrap(), next)
             })
-            .await
+            .await?
             .1,
         )
     }
@@ -129,7 +127,7 @@ impl<O: ObjectStore> FileSystem<O> {
         let amount = data.read_to_end(&mut vec).unwrap();
         file_data.size = amount as u64;
 
-        self.store.set(format!("file/{}", node), vec).await;
+        self.store.set(format!("file/{}", node), vec).await?;
         self.write_entry(entry).await?;
 
         Ok(amount as u32)
@@ -141,7 +139,7 @@ impl<O: ObjectStore> FileSystem<O> {
         let mut contents = self
             .store
             .get(&format!("file/{}", node))
-            .await
+            .await?
             .ok_or(IoError::NotFound)?;
 
         if offset > contents.len() {

@@ -50,22 +50,24 @@ where
                 let this = Arc::clone(&this_for_task);
                 let dispatcher = Arc::clone(&dispatcher);
                 tokio::spawn(async move {
-                    match message {
-                        Message::Event(e) => this.event(e).await,
+                    let result = match message {
+                        Message::Event(e) => this.event(e).await.map_err(anyhow::Error::new),
                         Message::Request(id, req) => {
                             let resp = this.request(req).await;
                             let serialized = resp.map(|resp| cbor_ser(&resp));
 
-                            if let Err(e) = dispatcher
+                            dispatcher
                                 .send(from, Message::Response(id, serialized))
                                 .await
-                            {
-                                log::error!("{}", e);
-                            }
                         }
                         Message::Response(id, m) => {
                             log::warn!("Unexpected response: {:?}", (from, id, m));
+                            Ok(())
                         }
+                    };
+
+                    if let Err(e) = result {
+                        log::error!("{}", e);
                     }
                 });
             }
@@ -86,10 +88,10 @@ where
     O: ObjectStore,
     P: Peer,
 {
-    async fn event(&self, event: Event) {
+    async fn event(&self, event: Event) -> IoResult<()> {
         match event {
             Event::Set(k, v) => {
-                self.backing.set(k, v).await;
+                self.backing.set(k, v).await?;
             }
 
             #[allow(unreachable_patterns)]
@@ -97,12 +99,14 @@ where
                 log::warn!("Unhandled event: {:?}", e);
             }
         }
+
+        Ok(())
     }
 
     async fn request(&self, req: Request) -> IoResult<Box<dyn erased_serde::Serialize + Send>> {
         match req {
             Request::Fetch(k) => {
-                let found = self.backing.get(&k).await;
+                let found = self.backing.get(&k).await?;
                 Ok(Box::new(Fetch(found)))
             }
 
@@ -121,8 +125,8 @@ where
     O: ObjectStore,
     P: Peer,
 {
-    async fn set(&self, key: String, value: Vec<u8>) {
-        futures::future::join(
+    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
+        let (_sends, set) = futures::future::join(
             futures::future::join_all(
                 self.peers
                     .iter()
@@ -131,13 +135,16 @@ where
             self.backing.set(key, value),
         )
         .await;
+        let () = set?;
+
+        Ok(())
     }
 
-    async fn get(&self, key: &str) -> Option<Vec<u8>> {
+    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         use futures::FutureExt;
 
-        if let Some(v) = self.backing.get(key).await {
-            return Some(v);
+        if let Some(v) = self.backing.get(key).await? {
+            return Ok(Some(v));
         }
 
         if self.peers.len() > 0 {
@@ -148,21 +155,26 @@ where
             .await;
 
             if let Ok((found, _)) = found {
-                return Some(found);
+                return Ok(Some(found));
             }
         }
 
-        None
+        Ok(None)
     }
 
-    async fn compare_exchange(&self, key: &str, current: Option<Vec<u8>>, new: Vec<u8>) -> bool {
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        current: Option<Vec<u8>>,
+        new: Vec<u8>,
+    ) -> IoResult<bool> {
         // TODO(shelbyd): Maintain semantics.
         if !self
             .backing
             .compare_exchange(key, current, new.clone())
-            .await
+            .await?
         {
-            return false;
+            return Ok(false);
         }
 
         futures::future::join_all(
@@ -172,7 +184,7 @@ where
         )
         .await;
 
-        true
+        Ok(true)
     }
 }
 
@@ -348,7 +360,7 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.set("foo".to_string(), b"bar".to_vec()).await;
+        net.set("foo".to_string(), b"bar".to_vec()).await.unwrap();
 
         assert!(peer.contains(&Message::Event(Event::Set(
             "foo".to_string(),
@@ -361,9 +373,9 @@ mod tests {
         let mem = Memory::default();
         let net = Network::<_, NetworkPeer>::new_inner(mem, vec![]);
 
-        net.set("foo".to_string(), b"bar".to_vec()).await;
+        net.set("foo".to_string(), b"bar".to_vec()).await.unwrap();
 
-        assert_eq!(net.backing.get("foo").await, Some(b"bar".to_vec()));
+        assert_eq!(net.backing.get("foo").await.unwrap(), Some(b"bar".to_vec()));
     }
 
     #[tokio::test]
@@ -374,9 +386,10 @@ mod tests {
         let net = Network::new_inner(mem, vec![&peer]);
 
         net.event(Event::Set("foo".to_string(), b"bar".to_vec()))
-            .await;
+            .await
+            .unwrap();
 
-        assert_eq!(net.backing.get("foo").await, Some(b"bar".to_vec()));
+        assert_eq!(net.backing.get("foo").await.unwrap(), Some(b"bar".to_vec()));
     }
 
     #[tokio::test]
@@ -386,9 +399,12 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.backing.set("foo".to_string(), b"bar".to_vec()).await;
+        net.backing
+            .set("foo".to_string(), b"bar".to_vec())
+            .await
+            .unwrap();
 
-        assert_eq!(net.get("foo").await, Some(b"bar".to_vec()));
+        assert_eq!(net.get("foo").await.unwrap(), Some(b"bar".to_vec()));
     }
 
     #[tokio::test]
@@ -411,7 +427,7 @@ mod tests {
             }
         });
 
-        assert_eq!(net.get("foo").await, Some(b"bar".to_vec()));
+        assert_eq!(net.get("foo").await.unwrap(), Some(b"bar".to_vec()));
     }
 
     #[tokio::test]
@@ -421,7 +437,9 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.compare_exchange("foo", None, b"bar".to_vec()).await;
+        net.compare_exchange("foo", None, b"bar".to_vec())
+            .await
+            .unwrap();
 
         assert!(peer.contains(&Message::Event(Event::Set(
             "foo".to_string(),
@@ -434,7 +452,7 @@ mod tests {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
-        mem.set("foo".to_string(), b"bar".to_vec()).await;
+        mem.set("foo".to_string(), b"bar".to_vec()).await.unwrap();
 
         let net = Network::new_inner(mem, vec![&peer]);
 
