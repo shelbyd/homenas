@@ -69,7 +69,7 @@ where
 {
     async fn receive(&self, message: Message) {
         match message {
-            Message::Set(k, v) => self.backing.set(k, v).await,
+            Message::Event(Event::Set(k, v)) => self.backing.set(k, v).await,
             m => {
                 log::warn!("Unhandled message: {:?}", m);
             }
@@ -84,10 +84,15 @@ where
     P: Peer + Send + Sync,
 {
     async fn set(&self, key: String, value: Vec<u8>) {
-        for peer in &self.peers {
-            peer.send(Message::Set(key.clone(), value.clone())).await;
-        }
-        self.backing.set(key, value).await;
+        futures::future::join(
+            futures::future::join_all(
+                self.peers
+                    .iter()
+                    .map(|p| p.send(Message::Event(Event::Set(key.clone(), value.clone())))),
+            ),
+            self.backing.set(key, value),
+        )
+        .await;
     }
 
     async fn get(&self, key: &str) -> Option<Vec<u8>> {
@@ -95,10 +100,14 @@ where
             return Some(v);
         }
 
-        for peer in &self.peers {
-            if let Ok(f) = peer.request::<Fetch>(Request::Fetch(key.to_string())).await {
-                return Some(f.0);
-            }
+        let found = futures::future::select_ok(
+            self.peers
+                .iter()
+                .map(|p| p.request::<Fetch>(Request::Fetch(key.to_string()))),
+        )
+        .await;
+        if let Ok((found, _)) = found {
+            return Some(found.0);
         }
 
         None
@@ -112,9 +121,12 @@ where
     {
         let (bytes, r) = self.backing.update(key.clone(), f).await;
 
-        for peer in &self.peers {
-            peer.send(Message::Set(key.clone(), bytes.clone())).await;
-        }
+        futures::future::join_all(
+            self.peers
+                .iter()
+                .map(|p| p.send(Message::Event(Event::Set(key.clone(), bytes.clone())))),
+        )
+        .await;
 
         (bytes, r)
     }
@@ -122,9 +134,14 @@ where
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Message {
-    Set(String, Vec<u8>),
+    Event(Event),
     Request(u32, Request),
     Response(u32, Vec<u8>),
+}
+
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Event {
+    Set(String, Vec<u8>),
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -283,7 +300,10 @@ mod tests {
 
         net.set("foo".to_string(), b"bar".to_vec()).await;
 
-        assert!(peer.contains(&Message::Set("foo".to_string(), b"bar".to_vec())));
+        assert!(peer.contains(&Message::Event(Event::Set(
+            "foo".to_string(),
+            b"bar".to_vec()
+        ))));
     }
 
     #[tokio::test]
@@ -303,8 +323,11 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.receive(Message::Set("foo".to_string(), b"bar".to_vec()))
-            .await;
+        net.receive(Message::Event(Event::Set(
+            "foo".to_string(),
+            b"bar".to_vec(),
+        )))
+        .await;
 
         assert_eq!(net.backing.get("foo").await, Some(b"bar".to_vec()));
     }
@@ -353,6 +376,9 @@ mod tests {
         net.update("foo".to_string(), |_| (b"bar".to_vec(), ()))
             .await;
 
-        assert!(peer.contains(&Message::Set("foo".to_string(), b"bar".to_vec())));
+        assert!(peer.contains(&Message::Event(Event::Set(
+            "foo".to_string(),
+            b"bar".to_vec()
+        ))));
     }
 }
