@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod memory;
 pub use memory::*;
 
@@ -14,6 +16,27 @@ pub trait ObjectStore {
     where
         F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
         R: Send;
+}
+
+pub struct StorageOptions {
+    replication: Replication,
+    location: Option<Location>,
+}
+
+pub enum Replication {
+    Saturate,
+    None {
+        banned_machines: Vec<MachineId>,
+        banned_disks: Vec<DiskId>,
+    },
+}
+
+pub struct MachineId(u64);
+pub struct DiskId(u64);
+
+pub struct Location {
+    machine: MachineId,
+    disk: DiskId,
 }
 
 #[async_trait::async_trait]
