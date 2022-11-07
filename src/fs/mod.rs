@@ -20,6 +20,12 @@ pub enum IoError {
     NotAFile,
     #[error("not a directory")]
     NotADirectory,
+    #[error("timeout")]
+    Timeout,
+    #[error("i/o")]
+    Io,
+    #[error("parsing")]
+    Parse,
 }
 
 #[derive(PartialEq, Eq, Debug, Deserialize, Serialize, Clone)]

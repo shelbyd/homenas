@@ -163,5 +163,8 @@ fn libc_error(io: IoError) -> libc::c_int {
         IoError::OutOfRange => libc::EINVAL,
         IoError::NotAFile => libc::EINVAL,
         IoError::NotADirectory => libc::EINVAL,
+        IoError::Timeout => libc::ETIMEDOUT,
+        IoError::Io => libc::EIO,
+        IoError::Parse => libc::EIO,
     }
 }

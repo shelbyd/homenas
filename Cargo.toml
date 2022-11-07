@@ -8,14 +8,16 @@ description = "A software NAS optimized for running at home."
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.58"
+dashmap = "5.4.0"
 env_logger = "0.9.1"
 futures = "0.3.25"
 libc = "0.2.137"
 log = "0.4.17"
 maplit = "1.0.2"
 polyfuse = "0.4.1"
+rand = "0.8.5"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_cbor = "0.11.2"
 structopt = "0.3.26"
 thiserror = "1.0.37"
-tokio = { version = "1.21.2", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.21.2", features = ["rt", "rt-multi-thread", "macros", "net", "time", "sync"] }

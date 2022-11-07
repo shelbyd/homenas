@@ -1,26 +1,63 @@
+use dashmap::{mapref::entry::Entry, DashMap};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::HashMap, net::SocketAddr};
+use std::{net::SocketAddr, sync::Arc};
+use tokio::{
+    net::UdpSocket,
+    sync::oneshot::{channel, Sender},
+};
 
 use crate::fs::{IoError, IoResult};
 
 use super::*;
 use response::*;
 
-type PeerId = u64;
-
 pub struct Network<O, P = NetworkPeer> {
     backing: O,
-    peers: HashMap<PeerId, P>,
+    peers: Vec<P>,
 }
 
-impl<O> Network<O> {
-    pub async fn new(_backing: O, _port: u16, _peers: &[SocketAddr]) -> anyhow::Result<Self> {
-        unimplemented!("new");
+impl<O> Network<O>
+where
+    O: ObjectStore + Send + Sync + 'static,
+{
+    pub async fn new(backing: O, port: u16, peers: &[SocketAddr]) -> anyhow::Result<Arc<Self>> {
+        let socket = UdpSocket::bind(("0.0.0.0", port)).await?;
+        let dispatcher = Arc::new(Dispatcher {
+            socket,
+            outstanding_requests: Default::default(),
+        });
+
+        let peers = peers.iter().map(|&addr| NetworkPeer {
+            addr,
+            dispatcher: Arc::clone(&dispatcher),
+        });
+
+        let this = Arc::new(Self::new_inner(backing, peers.collect()));
+
+        let this_for_task = Arc::clone(&this);
+        tokio::spawn(async move {
+            let mut buf = vec![0; 3 * 1024 * 1024];
+            loop {
+                let unhandled = match dispatcher.tick(&mut buf).await {
+                    Ok(Some(m)) => m,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        log::error!("{}", e);
+                        continue;
+                    }
+                };
+
+                let clone = Arc::clone(&this_for_task);
+                tokio::spawn(async move { clone.receive(unhandled).await });
+            }
+        });
+
+        Ok(this)
     }
 }
 
 impl<O, P> Network<O, P> {
-    fn new_inner(backing: O, peers: HashMap<PeerId, P>) -> Self {
+    fn new_inner(backing: O, peers: Vec<P>) -> Self {
         Self { backing, peers }
     }
 }
@@ -30,9 +67,12 @@ where
     O: ObjectStore + Send + Sync,
     P: Peer + Send + Sync,
 {
-    async fn receive(&self, from: PeerId, message: Message) {
+    async fn receive(&self, message: Message) {
         match message {
             Message::Set(k, v) => self.backing.set(k, v).await,
+            m => {
+                log::warn!("Unhandled message: {:?}", m);
+            },
         }
     }
 }
@@ -44,7 +84,7 @@ where
     P: Peer + Send + Sync,
 {
     async fn set(&self, key: String, value: Vec<u8>) {
-        for peer in self.peers.values() {
+        for peer in &self.peers {
             peer.send(Message::Set(key.clone(), value.clone()));
         }
         self.backing.set(key, value).await;
@@ -55,7 +95,7 @@ where
             return Some(v);
         }
 
-        for peer in self.peers.values() {
+        for peer in &self.peers {
             if let Ok(f) = peer.request::<Fetch>(Request::Fetch(key.to_string())).await {
                 return Some(f.0);
             }
@@ -71,7 +111,7 @@ where
     {
         let (bytes, r) = self.backing.update(key.clone(), f).await;
 
-        for peer in self.peers.values() {
+        for peer in &self.peers {
             peer.send(Message::Set(key.clone(), bytes.clone()));
         }
 
@@ -79,13 +119,15 @@ where
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Message {
     Set(String, Vec<u8>),
+    Request(u32, Request),
+    Response(u32, Vec<u8>),
 }
 
-#[derive(PartialEq, Eq, Debug)]
-enum Request {
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Request {
     Fetch(String),
 }
 
@@ -96,13 +138,18 @@ mod response {
     pub struct Fetch(pub Vec<u8>);
 }
 
+// TODO(shelbyd): Can make private?
 #[async_trait::async_trait]
-trait Peer {
+pub trait Peer {
     fn send(&self, message: Message);
+
     async fn request<R: DeserializeOwned>(&self, req: Request) -> IoResult<R>;
 }
 
-pub struct NetworkPeer {}
+pub struct NetworkPeer {
+    addr: SocketAddr,
+    dispatcher: Arc<Dispatcher>,
+}
 
 #[async_trait::async_trait]
 impl Peer for NetworkPeer {
@@ -111,7 +158,64 @@ impl Peer for NetworkPeer {
     }
 
     async fn request<R: DeserializeOwned>(&self, req: Request) -> IoResult<R> {
-        unimplemented!("request");
+        self.dispatcher.request(self.addr, req).await
+    }
+}
+
+struct Dispatcher {
+    socket: UdpSocket,
+    outstanding_requests: DashMap<(SocketAddr, u32), Sender<Vec<u8>>>,
+}
+
+impl Dispatcher {
+    async fn request<R: DeserializeOwned>(&self, addr: SocketAddr, req: Request) -> IoResult<R> {
+        let (sender, receiver) = channel();
+        let id = loop {
+            let id = rand::random();
+            match self.outstanding_requests.entry((addr, id)) {
+                Entry::Vacant(v) => {
+                    v.insert(sender);
+                    break id;
+                }
+                _ => {}
+            }
+        };
+
+        let req = serde_cbor::to_vec(&Message::Request(id, req)).map_err(|_| IoError::Parse)?;
+        self.socket.send_to(&req, addr).await.map_err(|e| {
+            log::error!("{}", e);
+            IoError::Io
+        })?;
+
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                Err(IoError::Timeout)
+            }
+            data = receiver => {
+                let data = data.map_err(|e| {
+                    log::error!("{}", e);
+                    IoError::Io
+                })?;
+                serde_cbor::from_slice(&data).map_err(|_| IoError::Parse)
+            }
+        }
+    }
+
+    async fn tick(&self, buf: &mut [u8]) -> anyhow::Result<Option<Message>> {
+        let (amount, from) = self.socket.recv_from(buf).await?;
+        let message = serde_cbor::from_slice(&buf[..amount])?;
+
+        match message {
+            Message::Response(id, data) => {
+                if let Some((_, sender)) = self.outstanding_requests.remove(&(from, id)) {
+                    let _disconnected = sender.send(data);
+                    Ok(None)
+                } else {
+                    Ok(Some(Message::Response(id, data)))
+                }
+            }
+            m => Ok(Some(m)),
+        }
     }
 }
 
@@ -165,12 +269,7 @@ mod tests {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
-        let net = Network::new_inner(
-            mem,
-            maplit::hashmap! {
-                1 => &peer,
-            },
-        );
+        let net = Network::new_inner(mem, vec![&peer]);
 
         net.set("foo".to_string(), b"bar".to_vec()).await;
 
@@ -180,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn set_saves_in_backing() {
         let mem = Memory::default();
-        let net = Network::<_, NetworkPeer>::new_inner(mem, maplit::hashmap! {});
+        let net = Network::<_, NetworkPeer>::new_inner(mem, vec![]);
 
         net.set("foo".to_string(), b"bar".to_vec()).await;
 
@@ -192,14 +291,9 @@ mod tests {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
-        let net = Network::new_inner(
-            mem,
-            maplit::hashmap! {
-                1 => &peer,
-            },
-        );
+        let net = Network::new_inner(mem, vec![&peer]);
 
-        net.receive(1, Message::Set("foo".to_string(), b"bar".to_vec()))
+        net.receive(Message::Set("foo".to_string(), b"bar".to_vec()))
             .await;
 
         assert_eq!(net.backing.get("foo").await, Some(b"bar".to_vec()));
@@ -210,12 +304,7 @@ mod tests {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
-        let net = Network::new_inner(
-            mem,
-            maplit::hashmap! {
-                1 => &peer,
-            },
-        );
+        let net = Network::new_inner(mem, vec![&peer]);
 
         net.backing.set("foo".to_string(), b"bar".to_vec()).await;
 
@@ -227,18 +316,13 @@ mod tests {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
-        let net = Network::new_inner(
-            mem,
-            maplit::hashmap! {
-                1 => &peer,
-            },
-        );
+        let net = Network::new_inner(mem, vec![&peer]);
 
         peer.respond(|m| match m {
             Request::Fetch(key) => {
                 assert_eq!(&key, "foo");
                 Some(TestPeer::ser(Fetch(b"bar".to_vec())))
-            },
+            }
 
             message => {
                 eprintln!("unrecognized message: {:?}", message);
@@ -254,14 +338,10 @@ mod tests {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
-        let net = Network::new_inner(
-            mem,
-            maplit::hashmap! {
-                1 => &peer,
-            },
-        );
+        let net = Network::new_inner(mem, vec![&peer]);
 
-        net.update("foo".to_string(), |_| (b"bar".to_vec(), ())).await;
+        net.update("foo".to_string(), |_| (b"bar".to_vec(), ()))
+            .await;
 
         assert!(peer.contains(&Message::Set("foo".to_string(), b"bar".to_vec())));
     }

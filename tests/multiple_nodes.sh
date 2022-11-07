@@ -7,6 +7,8 @@ cargo build
 
 set +e
 
+killall homenas
+
 DIR_A="/tmp/homenas_a"
 DIR_B="/tmp/homenas_b"
 DIR_C="/tmp/homenas_c"
@@ -15,7 +17,7 @@ mkdir $DIR_A || true
 mkdir $DIR_B || true
 mkdir $DIR_C || true
 
-sleep 0.1
+sleep 0.5
 
 ./target/debug/homenas start $DIR_A \
   --listen-on 42000 --peers=127.0.0.1:42001 --peers=127.0.0.1:42002 &
@@ -47,7 +49,7 @@ if [[ "$FROM_C" != "$TEXT" ]]; then
   echo "$FROM_C"
 fi
 
-killall target/debug/homenas
+killall homenas
 
 fusermount -u $DIR_A
 fusermount -u $DIR_B
