@@ -92,7 +92,7 @@ where
                 self.backing.set(k, v).await;
             }
 
-            #[cfg_attr(debug_assertions, allow(unreachable_patterns))]
+            #[allow(unreachable_patterns)]
             e => {
                 log::warn!("Unhandled event: {:?}", e);
             }
@@ -106,7 +106,7 @@ where
                 Ok(Box::new(Fetch(found)))
             }
 
-            #[cfg_attr(debug_assertions, allow(unreachable_patterns))]
+            #[allow(unreachable_patterns)]
             r => {
                 log::warn!("Unhandled request: {:?}", r);
                 Err(IoError::Unimplemented)
