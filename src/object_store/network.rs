@@ -262,8 +262,6 @@ mod tests {
             self.inc.lock().unwrap().contains(message)
         }
 
-        fn receive(&self, message: Message) {}
-
         fn respond(&self, f: impl Fn(Request) -> Option<Vec<u8>> + Send + Sync + 'static) {
             *self.responder.lock().unwrap() = Some(Box::new(f));
         }
@@ -357,6 +355,7 @@ mod tests {
                 Some(TestPeer::ser(Fetch(b"bar".to_vec())))
             }
 
+            #[allow(unreachable_patterns)]
             message => {
                 eprintln!("unrecognized message: {:?}", message);
                 None

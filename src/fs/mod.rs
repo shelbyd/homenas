@@ -47,6 +47,7 @@ pub enum EntryKind<F = (), D = ()> {
     Directory(D),
 }
 
+#[allow(dead_code)]
 impl<F, D> EntryKind<F, D> {
     pub fn as_file(&self) -> Option<&F> {
         match self {
