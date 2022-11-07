@@ -7,15 +7,27 @@ pub mod network;
 pub use network::*;
 
 #[async_trait::async_trait]
-pub trait ObjectStore {
+pub trait ObjectStore: Send + Sync {
     async fn set(&self, key: String, value: Vec<u8>);
     async fn get(&self, key: &str) -> Option<Vec<u8>>;
 
-    /// Update the value at the provided key. May retry until successful.
-    async fn update<R, F>(&self, key: String, f: F) -> (Vec<u8>, R)
-    where
-        F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
-        R: Send;
+    async fn compare_exchange(&self, key: &str, current: Option<Vec<u8>>, new: Vec<u8>) -> bool;
+}
+
+/// Update the value at the provided key. May retry until successful.
+pub async fn update<R, F, O>(store: &O, key: &str, mut f: F) -> (Vec<u8>, R)
+where
+    O: ObjectStore,
+    F: for<'v> FnMut(Option<&'v [u8]>) -> (Vec<u8>, R) + Send,
+    R: Send,
+{
+    loop {
+        let read = store.get(&key).await;
+        let (new, ret) = f(read.as_ref().map(|vec| vec.as_slice()));
+        if store.compare_exchange(&key, read, new.clone()).await {
+            return (new, ret);
+        }
+    }
 }
 
 pub struct StorageOptions {
@@ -42,7 +54,7 @@ pub struct Location {
 #[async_trait::async_trait]
 impl<O> ObjectStore for std::sync::Arc<O>
 where
-    O: ObjectStore + Send + Sync,
+    O: ObjectStore,
 {
     async fn set(&self, key: String, value: Vec<u8>) {
         (**self).set(key, value).await
@@ -51,11 +63,7 @@ where
         (**self).get(key).await
     }
 
-    async fn update<R, F>(&self, key: String, f: F) -> (Vec<u8>, R)
-    where
-        F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
-        R: Send,
-    {
-        (**self).update(key, f).await
+    async fn compare_exchange(&self, key: &str, current: Option<Vec<u8>>, new: Vec<u8>) -> bool {
+        (**self).compare_exchange(key, current, new).await
     }
 }

@@ -18,7 +18,7 @@ pub struct Network<O, P = NetworkPeer> {
 
 impl<O> Network<O>
 where
-    O: ObjectStore + Send + Sync + 'static,
+    O: ObjectStore + 'static,
 {
     pub async fn new(backing: O, port: u16, peers: &[SocketAddr]) -> anyhow::Result<Arc<Self>> {
         let socket = UdpSocket::bind(("0.0.0.0", port)).await?;
@@ -83,8 +83,8 @@ impl<O, P> Network<O, P> {
 
 impl<O, P> Network<O, P>
 where
-    O: ObjectStore + Send + Sync,
-    P: Peer + Send + Sync,
+    O: ObjectStore,
+    P: Peer,
 {
     async fn event(&self, event: Event) {
         match event {
@@ -118,8 +118,8 @@ where
 #[async_trait::async_trait]
 impl<O, P> ObjectStore for Network<O, P>
 where
-    O: ObjectStore + Send + Sync,
-    P: Peer + Send + Sync,
+    O: ObjectStore,
+    P: Peer,
 {
     async fn set(&self, key: String, value: Vec<u8>) {
         futures::future::join(
@@ -155,22 +155,23 @@ where
         None
     }
 
-    /// Update the value at the provided key. May retry until successful.
-    async fn update<R, F>(&self, key: String, f: F) -> (Vec<u8>, R)
-    where
-        F: for<'v> FnMut(Option<&'v Vec<u8>>) -> (Vec<u8>, R) + Send,
-        R: Send,
-    {
-        let (bytes, r) = self.backing.update(key.clone(), f).await;
+    async fn compare_exchange(&self, key: &str, current: Option<Vec<u8>>, new: Vec<u8>) -> bool {
+        if !self
+            .backing
+            .compare_exchange(key, current, new.clone())
+            .await
+        {
+            return false;
+        }
 
         futures::future::join_all(
             self.peers
                 .iter()
-                .map(|p| p.send(Message::Event(Event::Set(key.clone(), bytes.clone())))),
+                .map(|p| p.send(Message::Event(Event::Set(key.to_string(), new.clone())))),
         )
         .await;
 
-        (bytes, r)
+        true
     }
 }
 
@@ -200,7 +201,7 @@ mod response {
 
 // TODO(shelbyd): Can make private?
 #[async_trait::async_trait]
-pub trait Peer {
+pub trait Peer: Send + Sync {
     async fn send(&self, message: Message);
 
     async fn request<R: DeserializeOwned>(&self, req: Request) -> IoResult<R>;
@@ -413,14 +414,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_sets_on_peers() {
+    async fn compare_exchange_sets_on_peers() {
         let peer = TestPeer::default();
 
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.update("foo".to_string(), |_| (b"bar".to_vec(), ()))
-            .await;
+        net.compare_exchange("foo", None, b"bar".to_vec()).await;
 
         assert!(peer.contains(&Message::Event(Event::Set(
             "foo".to_string(),

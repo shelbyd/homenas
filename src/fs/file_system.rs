@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, io::BufRead};
 
 use super::*;
-use crate::object_store::*;
+use crate::object_store::{self, *};
 
 pub struct FileSystem<O> {
     store: O,
@@ -107,16 +107,16 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     async fn get_next_node_id(&self) -> IoResult<u64> {
-        Ok(self
-            .store
-            .update("meta/next_node_id".to_string(), |next| {
+        Ok(
+            object_store::update(&self.store, "meta/next_node_id", |next| {
                 let next = next
                     .map(|bytes| serde_cbor::from_slice(bytes).unwrap())
                     .unwrap_or(2);
                 (serde_cbor::to_vec(&(next + 1)).unwrap(), next)
             })
             .await
-            .1)
+            .1,
+        )
     }
 
     pub async fn write<B: BufRead>(&self, node: NodeId, offset: u64, mut data: B) -> IoResult<u32> {

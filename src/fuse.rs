@@ -8,7 +8,7 @@ use crate::{
 
 pub fn mount<O>(fs: FileSystem<O>, path: impl AsRef<Path>) -> anyhow::Result<()>
 where
-    O: ObjectStore + Send + Sync + 'static,
+    O: ObjectStore + 'static,
 {
     let session = Session::mount(path.as_ref().to_path_buf(), KernelConfig::default())?;
 
@@ -40,7 +40,7 @@ async fn process_operation<'r, O>(
     op: Operation<'r, Data<'r>>,
 ) -> Result<Box<dyn polyfuse::bytes::Bytes>, IoError>
 where
-    O: ObjectStore + Send + Sync + 'static,
+    O: ObjectStore + 'static,
 {
     match op {
         Operation::Lookup(op) => {
