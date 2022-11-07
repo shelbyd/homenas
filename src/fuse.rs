@@ -2,7 +2,7 @@ use polyfuse::{reply, Data, KernelConfig, Operation, Session};
 use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::{
-    fs::{Entry, FileKind, FileSystem, IoError},
+    fs::{Entry, EntryKind, FileSystem, IoError},
     object_store::ObjectStore,
 };
 
@@ -76,8 +76,8 @@ where
                 .take(op.size() as usize);
             for (i, entry) in entry_offsets {
                 let kind = match entry.kind {
-                    FileKind::File => libc::DT_REG,
-                    FileKind::Directory => libc::DT_DIR,
+                    EntryKind::File(_) => libc::DT_REG,
+                    EntryKind::Directory(_) => libc::DT_DIR,
                 } as u32;
 
                 let is_full = out.entry(entry.name.as_ref(), entry.node_id, kind, i as u64);
@@ -101,7 +101,7 @@ where
             Ok(Box::new(read))
         }
         Operation::Mknod(op) => match node_type(op.mode())? {
-            FileKind::File => {
+            EntryKind::File(()) => {
                 let entry = fs.create_file(op.parent(), op.name()).await?;
 
                 let mut out = reply::EntryOut::default();
@@ -135,22 +135,22 @@ fn file_attr(entry: Entry, attr: &mut reply::FileAttr) {
     attr.atime(entry.created_since_epoch());
     attr.mtime(entry.created_since_epoch());
 
-    // match entry.kind {
-    //     KindedAttributes::File { size, .. } => {
-    //         attr.size(size);
-    //         attr.blocks(1);
-    //         attr.blksize(u32::MAX);
-    //         attr.mode(libc::S_IFREG as u32 | 0o444);
-    //     }
-    //     KindedAttributes::Dir { .. } => {
-    //         attr.mode(libc::S_IFDIR as u32 | 0o555);
-    //     }
-    // }
+    match entry.kind {
+        EntryKind::File(f) => {
+            attr.size(f.size);
+            attr.blocks(1);
+            attr.blksize(u32::MAX);
+            attr.mode(libc::S_IFREG as u32 | 0o444);
+        }
+        EntryKind::Directory(_) => {
+            attr.mode(libc::S_IFDIR as u32 | 0o555);
+        }
+    }
 }
 
-fn node_type(mode: u32) -> Result<FileKind, IoError> {
+fn node_type(mode: u32) -> Result<EntryKind, IoError> {
     if mode & libc::S_IFREG > 0 {
-        return Ok(FileKind::File);
+        return Ok(EntryKind::File(()));
     }
 
     Err(IoError::Unimplemented)
@@ -161,5 +161,7 @@ fn libc_error(io: IoError) -> libc::c_int {
         IoError::NotFound => libc::ENOENT,
         IoError::Unimplemented => libc::ENOSYS,
         IoError::OutOfRange => libc::EINVAL,
+        IoError::NotAFile => libc::EINVAL,
+        IoError::NotADirectory => libc::EINVAL,
     }
 }
