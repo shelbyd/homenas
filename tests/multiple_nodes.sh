@@ -21,10 +21,9 @@ sleep 0.1
 
 ./target/debug/homenas start $DIR_A \
   --listen-on 42000 --peers=127.0.0.1:42001 --peers=127.0.0.1:42002 &
+NODE_A=$!
 ./target/debug/homenas start $DIR_B \
   --listen-on 42001 --peers=127.0.0.1:42000 --peers=127.0.0.1:42002 &
-./target/debug/homenas start $DIR_C \
-  --listen-on 42002 --peers=127.0.0.1:42000 --peers=127.0.0.1:42001 &
 
 sleep 1
 
@@ -35,6 +34,12 @@ echo $TEXT > "$DIR_A/hello.txt"
 
 sleep 0.5
 
+# DIR_C starts after the file has already been written.
+./target/debug/homenas start $DIR_C \
+  --listen-on 42002 --peers=127.0.0.1:42000 --peers=127.0.0.1:42001 &
+
+sleep 0.5
+
 echo "Testing A"
 ls -lah $DIR_A
 FROM_A="$(cat "$DIR_A/hello.txt")"
@@ -42,6 +47,8 @@ if [[ "$FROM_A" != "$TEXT" ]]; then
   echo "Written file does not match expected from A"
   echo "$FROM_A"
 fi
+
+kill $NODE_A
 
 echo "Testing B"
 ls -lah $DIR_B
