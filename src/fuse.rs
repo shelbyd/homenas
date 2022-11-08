@@ -18,7 +18,13 @@ where
         Err(e) => return Err(e.into()),
     }
 
-    let session = Session::mount(path.to_path_buf(), KernelConfig::default())?;
+    let session = Session::mount(path.to_path_buf(), KernelConfig::default()).map_err(|e| {
+        if e.to_string().contains("too short control message length") {
+            anyhow::anyhow!("FUSE already mounted at {}", path.to_string_lossy())
+        } else {
+            e.into()
+        }
+    })?;
 
     let fs = Arc::new(fs);
     while let Some(req) = session.next_request()? {
