@@ -18,6 +18,7 @@ use crate::fs::{IoError, IoResult};
 pub trait ObjectStore: Send + Sync {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()>;
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>>;
+    async fn clear(&self, key: &str) -> IoResult<()>;
 
     /// Currently does not support strong compare_exchange semantics.
     async fn compare_exchange(
@@ -77,6 +78,9 @@ where
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         (**self).get(key).await
     }
+    async fn clear(&self, key: &str) -> IoResult<()> {
+        (**self).clear(key).await
+    }
 
     async fn compare_exchange(
         &self,
@@ -99,6 +103,9 @@ where
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         (**self).get(key).await
     }
+    async fn clear(&self, key: &str) -> IoResult<()> {
+        (**self).clear(key).await
+    }
 
     async fn compare_exchange(
         &self,
@@ -117,6 +124,9 @@ impl ObjectStore for Box<dyn ObjectStore> {
     }
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         (**self).get(key).await
+    }
+    async fn clear(&self, key: &str) -> IoResult<()> {
+        (**self).clear(key).await
     }
 
     async fn compare_exchange(

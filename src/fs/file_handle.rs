@@ -187,6 +187,15 @@ impl<O: ObjectStore> FileHandle<O> {
     pub fn size(&self) -> u64 {
         self.chunks.values().map(|c| c.size() as u64).sum()
     }
+
+    pub async fn forget(self) -> IoResult<()> {
+        for chunk in self.chunks.into_values() {
+            chunk.forget(&self.store).await?;
+        }
+
+        self.store.clear(&self.meta_key).await?;
+        Ok(())
+    }
 }
 
 impl Chunk {
@@ -230,6 +239,11 @@ impl Chunk {
             id: self.id(),
             size: self.size(),
         }
+    }
+
+    async fn forget(self, store: &CborTyped<impl ObjectStore>) -> IoResult<()> {
+        store.clear(&self.storage_key()).await?;
+        Ok(())
     }
 }
 
@@ -391,5 +405,17 @@ mod tests {
         assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
 
         assert_eq!(fh.read(4, 4096).await, Err(IoError::OutOfRange));
+    }
+
+    #[tokio::test]
+    async fn forget_clears_store() {
+        let mem = Memory::default();
+        let mut fh = FileHandle::create(&mem, ONE_MB, "meta").await.unwrap();
+
+        fh.write(0, 3, &b"foo"[..]).await.unwrap();
+        fh.flush().await.unwrap();
+
+        assert_eq!(fh.forget().await, Ok(()));
+        assert_eq!(mem.len(), 0);
     }
 }

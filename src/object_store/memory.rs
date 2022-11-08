@@ -7,6 +7,13 @@ pub struct Memory {
     inner: RwLock<HashMap<String, Vec<u8>>>,
 }
 
+impl Memory {
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.inner.read().unwrap().len()
+    }
+}
+
 #[async_trait::async_trait]
 impl ObjectStore for Memory {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
@@ -19,6 +26,11 @@ impl ObjectStore for Memory {
 
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         Ok(self.inner.read().unwrap().get(key).cloned())
+    }
+
+    async fn clear(&self, key: &str) -> IoResult<()> {
+        self.inner.write().unwrap().remove(key);
+        Ok(())
     }
 
     async fn compare_exchange(

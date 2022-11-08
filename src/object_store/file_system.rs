@@ -45,6 +45,11 @@ impl ObjectStore for FileSystem {
         }
     }
 
+    async fn clear(&self, key: &str) -> IoResult<()> {
+        fs::remove_file(self.path.join(key)).await?;
+        Ok(())
+    }
+
     async fn compare_exchange(
         &self,
         key: &str,
@@ -148,10 +153,7 @@ mod tests {
 
             fs.set("foo", b"bar").await.unwrap();
 
-            assert_eq!(
-                fs.compare_exchange("foo", None, b"baz").await,
-                Ok(false)
-            );
+            assert_eq!(fs.compare_exchange("foo", None, b"baz").await, Ok(false));
             assert_eq!(fs.get("foo").await, Ok(Some(bar())));
         }
 
@@ -175,8 +177,7 @@ mod tests {
             fs.set("foo", b"bar").await.unwrap();
 
             assert_eq!(
-                fs.compare_exchange("foo", Some(b"baz"), b"bar")
-                    .await,
+                fs.compare_exchange("foo", Some(b"baz"), b"bar").await,
                 Ok(false)
             );
             assert_eq!(fs.get("foo").await, Ok(Some(bar())));
@@ -190,8 +191,7 @@ mod tests {
             fs.set("foo", b"bar").await.unwrap();
 
             assert_eq!(
-                fs.compare_exchange("foo", Some(b"bar"), b"baz")
-                    .await,
+                fs.compare_exchange("foo", Some(b"bar"), b"baz").await,
                 Ok(true)
             );
             assert_eq!(fs.get("foo").await, Ok(Some(b"baz".to_vec())));

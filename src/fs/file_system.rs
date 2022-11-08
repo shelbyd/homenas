@@ -52,13 +52,7 @@ impl<O: ObjectStore> FileSystem<O> {
             .await?
         {
             Some(e) => Ok(e),
-            None if node == 1 => {
-                return Ok(Entry {
-                    node_id: 1,
-                    name: OsString::from("."),
-                    kind: DetailedKind::Directory(DirectoryData::default()),
-                });
-            }
+            None if node == 1 => return Ok(root_entry()),
             None => unreachable!("parent has broken link to child"),
         }
     }
@@ -67,6 +61,25 @@ impl<O: ObjectStore> FileSystem<O> {
         self.typed_store()
             .set_typed(&format!("file/{}.meta", entry.node_id), &entry)
             .await
+    }
+
+    pub async fn update_entry(
+        &self,
+        node: NodeId,
+        mut update: impl FnMut(&mut Entry) -> IoResult<()> + Send,
+    ) -> IoResult<Entry> {
+        update_typed(&self.store, &format!("file/{}.meta", node), |entry| {
+            let mut entry = match entry {
+                Some(e) => e,
+                None if node == 1 => root_entry(),
+                None => return Err(IoError::NotFound),
+            };
+
+            update(&mut entry)?;
+
+            Ok((entry.clone(), entry))
+        })
+        .await
     }
 
     pub async fn list_children(&self, node: NodeId) -> IoResult<Vec<Entry>> {
@@ -104,14 +117,16 @@ impl<O: ObjectStore> FileSystem<O> {
         };
         self.write_entry(file_entry).await?;
 
-        let mut parent = self.read_entry(parent).await?;
-        parent
-            .kind
-            .as_dir_mut()
-            .ok_or(IoError::NotADirectory)?
-            .children
-            .insert(name.into(), new_node_id);
-        self.write_entry(parent).await?;
+        self.update_entry(parent, |parent| {
+            parent
+                .kind
+                .as_dir_mut()
+                .ok_or(IoError::NotADirectory)?
+                .children
+                .insert(name.into(), new_node_id);
+            Ok(())
+        })
+        .await?;
 
         Ok(Entry {
             node_id: new_node_id,
@@ -128,22 +143,46 @@ impl<O: ObjectStore> FileSystem<O> {
         .await
     }
 
+    pub async fn unlink(&self, parent: NodeId, name: &OsStr) -> IoResult<()> {
+        self.update_entry(parent, |parent| {
+            parent
+                .kind
+                .as_dir_mut()
+                .ok_or(IoError::NotADirectory)?
+                .children
+                .remove(name)
+                .ok_or(IoError::NotFound)?;
+            Ok(())
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn forget(&self, node: NodeId) -> IoResult<()> {
+        let handle = self.create_handle(node).await?;
+        handle.forget().await?;
+        Ok(())
+    }
+
     pub async fn open(&self, node: NodeId) -> IoResult<HandleId> {
         match self.open_handles.entry(node) {
             DashMapEntry::Occupied(_) => Err(IoError::TempUnavailable),
             DashMapEntry::Vacant(v) => {
-                let handle = FileHandle::create(
-                    Arc::clone(&self.store),
-                    1024 * 1024,
-                    &format!("file/{}.chunks", node),
-                )
-                .await?;
-
+                let handle = self.create_handle(node).await?;
                 v.insert(handle);
-
                 Ok(node)
             }
         }
+    }
+
+    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<Arc<O>>> {
+        FileHandle::create(
+            Arc::clone(&self.store),
+            1024 * 1024,
+            &format!("file/{}.chunks", node),
+        )
+        .await
     }
 
     pub async fn write<B: BufRead>(
@@ -184,12 +223,21 @@ impl<O: ObjectStore> FileSystem<O> {
             .1;
         handle.flush().await?;
 
-        let mut entry = self.read_entry(node).await?;
-        let file_data = entry.kind.as_file_mut().ok_or(IoError::NotAFile)?;
-        file_data.size = handle.size();
-        self.write_entry(entry).await?;
+        self.update_entry(node, |entry| {
+            entry.kind.as_file_mut().ok_or(IoError::NotAFile)?.size = handle.size();
+            Ok(())
+        })
+        .await?;
 
         Ok(())
+    }
+}
+
+fn root_entry() -> Entry {
+    Entry {
+        node_id: 1,
+        name: OsString::from("."),
+        kind: DetailedKind::Directory(DirectoryData::default()),
     }
 }
 
@@ -306,5 +354,17 @@ mod tests {
 
         let entry = fs.read_entry(attrs.node_id).await.unwrap();
         assert_eq!(entry.kind.as_file().unwrap().size, 3);
+    }
+
+    #[tokio::test]
+    async fn unlink_deletes_file() {
+        let mem_os = crate::object_store::Memory::default();
+        let fs = FileSystem::new(mem_os);
+
+        let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        fs.unlink(1, &OsStr::new("foo.txt")).await.unwrap();
+
+        let entries = fs.list_children(1).await.unwrap();
+        assert!(!entries.contains(&created));
     }
 }

@@ -10,7 +10,15 @@ pub fn mount<O>(fs: FileSystem<O>, path: impl AsRef<Path>) -> anyhow::Result<()>
 where
     O: ObjectStore + 'static,
 {
-    let session = Session::mount(path.as_ref().to_path_buf(), KernelConfig::default())?;
+    let path = path.as_ref();
+
+    match std::fs::create_dir_all(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    let session = Session::mount(path.to_path_buf(), KernelConfig::default())?;
 
     let fs = Arc::new(fs);
     while let Some(req) = session.next_request()? {
@@ -133,6 +141,16 @@ where
                 Err(IoError::Unimplemented)
             }
         },
+        Operation::Unlink(op) => {
+            fs.unlink(op.parent(), op.name()).await?;
+            Ok(Box::new(Vec::<u8>::new()))
+        }
+        Operation::Forget(op) => {
+            for forget in &*op {
+                fs.forget(forget.ino()).await?;
+            }
+            Ok(Box::new(Vec::<u8>::new()))
+        }
 
         unhandled => {
             log::warn!("Unhandled operation: {:?}", unhandled);

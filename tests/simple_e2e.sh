@@ -2,10 +2,14 @@
 
 set -euo pipefail
 
-DIR="/tmp/homenas_a"
-
-sleep 2
+cargo build
 cargo test
+
+set +e
+
+DIR="/tmp/homenas_a"
+./target/debug/homenas start $DIR &
+sleep 0.5
 
 ls -lah $DIR
 
@@ -16,6 +20,14 @@ echo $TEXT > $HELLO
 cat $HELLO
 if [[ $(cat $HELLO) != "$TEXT" ]]; then
   echo "Written file does not match expected"
-
-  exit 1
 fi
+
+ls -lah $DIR
+rm $HELLO
+ls -lah $DIR
+
+killall homenas
+
+fusermount -u $DIR
+
+rm -r /tmp/homenas_*

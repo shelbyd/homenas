@@ -93,11 +93,7 @@ where
             Event::Set(k, v) => {
                 self.backing.set(&k, &v).await?;
             }
-
-            #[allow(unreachable_patterns)]
-            e => {
-                log::warn!("Unhandled event: {:?}", e);
-            }
+            Event::Clear(k) => self.backing.clear(&k).await?,
         }
 
         Ok(())
@@ -109,13 +105,16 @@ where
                 let found = self.backing.get(&k).await?;
                 Ok(Box::new(Fetch(found)))
             }
-
-            #[allow(unreachable_patterns)]
-            r => {
-                log::warn!("Unhandled request: {:?}", r);
-                Err(IoError::Unimplemented)
-            }
         }
+    }
+
+    async fn broadcast(&self, event: Event) {
+        futures::future::join_all(
+            self.peers
+                .iter()
+                .map(|p| p.send(Message::Event(event.clone()))),
+        )
+        .await;
     }
 }
 
@@ -127,11 +126,7 @@ where
 {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         let (_sends, set) = futures::future::join(
-            futures::future::join_all(
-                self.peers
-                    .iter()
-                    .map(|p| p.send(Message::Event(Event::Set(key.to_string(), value.to_vec())))),
-            ),
+            self.broadcast(Event::Set(key.to_string(), value.to_vec())),
             self.backing.set(key, value),
         )
         .await;
@@ -162,6 +157,17 @@ where
         Ok(None)
     }
 
+    async fn clear(&self, key: &str) -> IoResult<()> {
+        let (_sends, clear) = futures::future::join(
+            self.broadcast(Event::Clear(key.to_string())),
+            self.backing.clear(key),
+        )
+        .await;
+
+        let () = clear?;
+        Ok(())
+    }
+
     async fn compare_exchange(
         &self,
         key: &str,
@@ -177,12 +183,8 @@ where
             return Ok(false);
         }
 
-        futures::future::join_all(
-            self.peers
-                .iter()
-                .map(|p| p.send(Message::Event(Event::Set(key.to_string(), new.to_vec())))),
-        )
-        .await;
+        self.broadcast(Event::Set(key.to_string(), new.to_vec()))
+            .await;
 
         Ok(true)
     }
@@ -195,9 +197,10 @@ pub enum Message {
     Response(u32, Result<Vec<u8>, IoError>),
 }
 
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 pub enum Event {
     Set(String, Vec<u8>),
+    Clear(String),
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -399,10 +402,7 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.backing
-            .set("foo", b"bar")
-            .await
-            .unwrap();
+        net.backing.set("foo", b"bar").await.unwrap();
 
         assert_eq!(net.get("foo").await.unwrap(), Some(b"bar".to_vec()));
     }
@@ -437,9 +437,7 @@ mod tests {
         let mem = Memory::default();
         let net = Network::new_inner(mem, vec![&peer]);
 
-        net.compare_exchange("foo", None, b"bar")
-            .await
-            .unwrap();
+        net.compare_exchange("foo", None, b"bar").await.unwrap();
 
         assert!(peer.contains(&Message::Event(Event::Set(
             "foo".to_string(),
