@@ -16,6 +16,7 @@ use crate::fs::{IoError, IoResult};
 
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {
+    // TODO(shelbyd): Pass value as &[u8].
     async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()>;
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>>;
 
@@ -62,6 +63,29 @@ pub struct DiskId(u64);
 pub struct Location {
     machine: MachineId,
     disk: DiskId,
+}
+
+#[async_trait::async_trait]
+impl<'o, O> ObjectStore for &'o O
+where
+    O: ObjectStore,
+{
+    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
+        (**self).set(key, value).await
+    }
+    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
+        (**self).get(key).await
+    }
+
+    /// Currently does not implement actual compare_exchange semantics for all ObjectStores.
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        current: Option<Vec<u8>>,
+        new: Vec<u8>,
+    ) -> IoResult<bool> {
+        (**self).compare_exchange(key, current, new).await
+    }
 }
 
 #[async_trait::async_trait]

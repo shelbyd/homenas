@@ -122,7 +122,10 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     pub async fn write<B: BufRead>(&self, node: NodeId, offset: u64, mut data: B) -> IoResult<u32> {
-        assert_eq!(offset, 0);
+        if offset != 0 {
+            log::error!("write with offset: {}", offset);
+            return Err(IoError::Unimplemented);
+        }
 
         let mut entry = self.read_entry(node).await?;
         let file_data = entry.kind.as_file_mut().ok_or(IoError::NotAFile)?;
@@ -131,7 +134,9 @@ impl<O: ObjectStore> FileSystem<O> {
         let amount = data.read_to_end(&mut vec).unwrap();
         file_data.size = amount as u64;
 
-        self.store.set_typed::<Contents>(format!("file/{}", node), &Contents::Raw(vec)).await?;
+        self.store
+            .set_typed::<Contents>(format!("file/{}", node), &Contents::Raw(vec))
+            .await?;
         self.write_entry(entry).await?;
 
         Ok(amount as u32)
