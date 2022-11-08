@@ -56,6 +56,8 @@ async fn process_operation<'r, O>(
 where
     O: ObjectStore + 'static,
 {
+    log::debug!("received operation: {:?}", op);
+
     match op {
         Operation::Lookup(op) => {
             let entry = fs.lookup(op.parent(), op.name()).await?;
@@ -145,6 +147,11 @@ where
             for forget in &*op {
                 fs.forget(forget.ino()).await?;
             }
+            Ok(Box::new(Vec::<u8>::new()))
+        }
+        Operation::Rmdir(op) => {
+            let node = fs.unlink(op.parent(), op.name()).await?;
+            fs.forget(node).await?;
             Ok(Box::new(Vec::<u8>::new()))
         }
 

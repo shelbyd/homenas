@@ -63,11 +63,11 @@ impl<O: ObjectStore> FileSystem<O> {
             .await
     }
 
-    pub async fn update_entry(
+    pub async fn update_entry<R: Send>(
         &self,
         node: NodeId,
-        mut update: impl FnMut(&mut Entry) -> IoResult<()> + Send,
-    ) -> IoResult<Entry> {
+        mut update: impl FnMut(&mut Entry) -> IoResult<R> + Send,
+    ) -> IoResult<(Entry, R)> {
         update_typed(&self.store, &format!("file/{}.meta", node), |entry| {
             let mut entry = match entry {
                 Some(e) => e,
@@ -75,9 +75,9 @@ impl<O: ObjectStore> FileSystem<O> {
                 None => return Err(IoError::NotFound),
             };
 
-            update(&mut entry)?;
+            let r = update(&mut entry)?;
 
-            Ok((entry.clone(), entry))
+            Ok((entry.clone(), (entry, r)))
         })
         .await
     }
@@ -155,20 +155,20 @@ impl<O: ObjectStore> FileSystem<O> {
         .await
     }
 
-    pub async fn unlink(&self, parent: NodeId, name: &OsStr) -> IoResult<()> {
-        self.update_entry(parent, |parent| {
-            parent
-                .kind
-                .as_dir_mut()
-                .ok_or(IoError::NotADirectory)?
-                .children
-                .remove(name)
-                .ok_or(IoError::NotFound)?;
-            Ok(())
-        })
-        .await?;
+    pub async fn unlink(&self, parent: NodeId, name: &OsStr) -> IoResult<NodeId> {
+        let (_, node_id) = self
+            .update_entry(parent, |parent| {
+                Ok(parent
+                    .kind
+                    .as_dir_mut()
+                    .ok_or(IoError::NotADirectory)?
+                    .children
+                    .remove(name)
+                    .ok_or(IoError::NotFound)?)
+            })
+            .await?;
 
-        Ok(())
+        Ok(node_id)
     }
 
     pub async fn forget(&self, node: NodeId) -> IoResult<()> {

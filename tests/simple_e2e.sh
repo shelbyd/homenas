@@ -11,7 +11,7 @@ DIR="/tmp/homenas_a"
 ./target/debug/homenas start $DIR &
 sleep 0.5
 
-ls -lah $DIR
+tree -s -h $DIR
 
 HELLO="$DIR/hello.txt"
 TEXT="Hello World!"
@@ -22,12 +22,16 @@ if [[ $(cat $HELLO) != "$TEXT" ]]; then
   echo "Written file does not match expected"
 fi
 
-ls -lah $DIR
+tree -s -h $DIR
 rm $HELLO
-ls -lah $DIR
+tree -s -h $DIR
 
 mkdir -p "$DIR/foo/bar/baz"
-ls -lah $DIR
+tree -s -h $DIR
+echo $TEXT > "$DIR/foo/bar/baz/hello.txt"
+
+rm -r "$DIR/foo"
+tree -s -h $DIR
 
 killall homenas
 
