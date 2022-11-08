@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::{io::BufRead, ops::Range};
+use std::io::BufRead;
 
 use super::*;
 use crate::object_store::*;
@@ -8,7 +8,7 @@ use crate::object_store::*;
 #[derive(Serialize, Deserialize)]
 struct ChunkIds {
     chunk_size: u32,
-    chunks: BTreeMap<u64, String>,
+    chunks: BTreeMap<u64, ChunkRef>,
 }
 
 pub struct FileHandle<O> {
@@ -20,8 +20,14 @@ pub struct FileHandle<O> {
 
 #[derive(Debug)]
 enum Chunk {
-    Id(String),
-    Cached(Vec<u8>),
+    Ref(ChunkRef),
+    InMemory(Vec<u8>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ChunkRef {
+    id: String,
+    size: u32,
 }
 
 impl<O: ObjectStore> FileHandle<O> {
@@ -44,7 +50,7 @@ impl<O: ObjectStore> FileHandle<O> {
         let chunks = ids
             .chunks
             .into_iter()
-            .map(|(key, value)| (key, Chunk::Id(value)))
+            .map(|(key, value)| (key, Chunk::Ref(value)))
             .collect();
 
         Ok(Self {
@@ -60,26 +66,31 @@ impl<O: ObjectStore> FileHandle<O> {
         Some(chunk.storage_key())
     }
 
-    pub async fn read(&self, range: Range<u64>) -> IoResult<Vec<u8>> {
+    pub async fn read(&self, offset: u64, amount: u32) -> IoResult<Vec<u8>> {
         use std::borrow::Cow;
 
         let mut ret = Vec::new();
-        let mut start = range.start;
+        let mut start = offset;
+        let end = offset + amount as u64;
 
-        while start < range.end {
-            let (chunk_offset, buf_start, buf_end) = self.chunk_range(start, range.end);
+        while start < end {
+            let (chunk_offset, buf_start, buf_end) = self.chunk_range(start, end);
 
             let buf = match self.chunks.get(&chunk_offset) {
                 None => return Ok(ret),
 
-                Some(Chunk::Cached(v)) => Cow::Borrowed(v),
-                Some(c @ Chunk::Id(_)) => Cow::Owned(
+                Some(Chunk::InMemory(v)) => Cow::Borrowed(v),
+                Some(c @ Chunk::Ref(_)) => Cow::Owned(
                     self.store
                         .get(&c.storage_key())
                         .await?
                         .ok_or(IoError::NotFound)?,
                 ),
             };
+
+            if buf_start > buf.len() {
+                return Err(IoError::OutOfRange);
+            }
 
             let buf_end = core::cmp::min(buf_end, buf.len());
             let buf = &buf[buf_start..buf_end];
@@ -123,12 +134,7 @@ impl<O: ObjectStore> FileHandle<O> {
     }
 
     fn chunk_range(&self, start: u64, end: u64) -> (u64, usize, usize) {
-        let chunk_offset = (start / self.chunk_size as u64) * self.chunk_size as u64;
-
-        let buf_start = (start - chunk_offset) as usize;
-        let buf_end = core::cmp::min(end - chunk_offset, self.chunk_size as u64) as usize;
-
-        (chunk_offset, buf_start, buf_end)
+        chunk_range(self.chunk_size, start, end)
     }
 
     async fn write_to(&mut self, offset: u64) -> IoResult<&mut Vec<u8>> {
@@ -137,8 +143,8 @@ impl<O: ObjectStore> FileHandle<O> {
         let entry = self
             .chunks
             .entry(offset)
-            .or_insert(Chunk::Cached(Vec::new()));
-        if let Chunk::Cached(v) = entry {
+            .or_insert(Chunk::InMemory(Vec::new()));
+        if let Chunk::InMemory(v) = entry {
             return Ok(v);
         }
 
@@ -147,26 +153,18 @@ impl<O: ObjectStore> FileHandle<O> {
             .get(&entry.storage_key())
             .await?
             .ok_or(IoError::NotFound)?;
-        *entry = Chunk::Cached(buf);
+        *entry = Chunk::InMemory(buf);
 
         match entry {
-            Chunk::Cached(v) => Ok(v),
+            Chunk::InMemory(v) => Ok(v),
             _ => unreachable!(),
         }
     }
 
     async fn flush_full_chunks(&mut self) -> IoResult<()> {
         for chunk in self.chunks.values_mut() {
-            match chunk {
-                Chunk::Id(_) => continue,
-                Chunk::Cached(buf) if buf.len() != self.chunk_size as usize => continue,
-                Chunk::Cached(buf) => {
-                    let owned = buf.clone();
-
-                    self.store.set(chunk.storage_key(), owned).await?;
-
-                    *chunk = Chunk::Id(chunk.id());
-                }
+            if chunk.size() == self.chunk_size {
+                chunk.flush(&self.store).await?;
             }
         }
 
@@ -177,36 +175,75 @@ impl<O: ObjectStore> FileHandle<O> {
         let mut chunk_ids = ChunkIds::new(self.chunk_size);
 
         for (offset, chunk) in &mut self.chunks {
-            let id = match chunk {
-                Chunk::Id(id) => id.clone(),
-                Chunk::Cached(buf) => {
+            let ref_ = match chunk {
+                Chunk::Ref(r) => r.clone(),
+                Chunk::InMemory(buf) => {
                     let owned = buf.clone();
+                    let ref_ = ChunkRef {
+                        size: buf.len() as u32,
+                        id: chunk.id(),
+                    };
 
                     self.store.set(chunk.storage_key(), owned).await?;
 
-                    *chunk = Chunk::Id(chunk.id());
-                    chunk.id()
+                    *chunk = Chunk::Ref(ref_.clone());
+                    ref_
                 }
             };
-            chunk_ids.chunks.insert(*offset, id);
+            chunk_ids.chunks.insert(*offset, ref_);
         }
 
         self.store
             .set_typed::<ChunkIds>(self.meta_key.clone(), &chunk_ids)
             .await
     }
+
+    pub fn size(&self) -> u64 {
+        self.chunks.values().map(|c| c.size() as u64).sum()
+    }
 }
 
 impl Chunk {
     fn id(&self) -> String {
         match self {
-            Chunk::Id(s) => s.clone(),
-            Chunk::Cached(v) => hex::encode(blake3::hash(v).as_bytes()),
+            Chunk::Ref(r) => r.id.clone(),
+            Chunk::InMemory(v) => hex::encode(blake3::hash(v).as_bytes()),
         }
     }
 
     fn storage_key(&self) -> String {
         format!("chunks/{}", self.id())
+    }
+
+    fn size(&self) -> u32 {
+        match self {
+            Chunk::InMemory(v) => v.len() as u32,
+            Chunk::Ref(r) => r.size,
+        }
+    }
+
+    async fn flush(&mut self, store: &CborTyped<impl ObjectStore>) -> IoResult<()> {
+        match self {
+            Chunk::Ref(_) => {}
+            Chunk::InMemory(buf) => {
+                let owned = buf.clone();
+                let ref_ = self.ref_();
+
+                log::info!("{}: Flushing chunk", self.id());
+                store.set(self.storage_key(), owned).await?;
+
+                *self = Chunk::Ref(ref_);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ref_(&self) -> ChunkRef {
+        ChunkRef {
+            id: self.id(),
+            size: self.size(),
+        }
     }
 }
 
@@ -219,18 +256,35 @@ impl ChunkIds {
     }
 }
 
+fn chunk_range(chunk_size: u32, start: u64, end: u64) -> (u64, usize, usize) {
+    let chunk_offset = (start / chunk_size as u64) * chunk_size as u64;
+
+    let buf_start = (start - chunk_offset) as usize;
+    let buf_end = core::cmp::min(end - chunk_offset, chunk_size as u64) as usize;
+
+    (chunk_offset, buf_start, buf_end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const ONE_MB: u32 = 1024 * 1024; // 1 MiB
 
+    #[test]
+    fn test_chunk_range() {
+        assert_eq!(
+            chunk_range(ONE_MB, 4, u32::MAX as u64),
+            (0, 4 as usize, ONE_MB as usize)
+        );
+    }
+
     #[tokio::test]
     async fn created_file_has_no_contents() {
         let mem = Memory::default();
         let fh = FileHandle::create(&mem, ONE_MB, "meta").await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(Vec::new()));
+        assert_eq!(fh.read(0, 4096).await, Ok(Vec::new()));
     }
 
     #[tokio::test]
@@ -240,7 +294,7 @@ mod tests {
 
         assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
 
-        assert_eq!(fh.read(0..4096).await, Ok(b"foo".to_vec()));
+        assert_eq!(fh.read(0, 4096).await, Ok(b"foo".to_vec()));
     }
 
     #[tokio::test]
@@ -250,7 +304,7 @@ mod tests {
 
         fh.write(3, 3, &[1, 2, 3][..]).await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(vec![0, 0, 0, 1, 2, 3]));
+        assert_eq!(fh.read(0, 4096).await, Ok(vec![0, 0, 0, 1, 2, 3]));
     }
 
     #[tokio::test]
@@ -261,7 +315,7 @@ mod tests {
         fh.write(3, 3, &[3, 4, 5][..]).await.unwrap();
         fh.write(0, 3, &[0, 1, 2][..]).await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(vec![0, 1, 2, 3, 4, 5]));
+        assert_eq!(fh.read(0, 4096).await, Ok(vec![0, 1, 2, 3, 4, 5]));
     }
 
     #[tokio::test]
@@ -271,7 +325,7 @@ mod tests {
 
         fh.write(0, 4, &[1, 2, 3, 4][..]).await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(vec![1, 2, 3, 4]));
+        assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4]));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
             Ok(Some(vec![1, 2, 3, 4]))
@@ -286,7 +340,7 @@ mod tests {
         fh.write(0, 2, &[1, 2][..]).await.unwrap();
         fh.write(2, 2, &[3, 4][..]).await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(vec![1, 2, 3, 4]));
+        assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4]));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
             Ok(Some(vec![1, 2, 3, 4]))
@@ -301,7 +355,7 @@ mod tests {
         fh.write(0, 2, &[1, 2][..]).await.unwrap();
         fh.write(2, 4, &[3, 4, 5, 6][..]).await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(vec![1, 2, 3, 4, 5, 6]));
+        assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4, 5, 6]));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
             Ok(Some(vec![1, 2, 3, 4]))
@@ -316,7 +370,7 @@ mod tests {
         let zero_to_twelve = (0..12).collect::<Vec<_>>();
         fh.write(0, 12, zero_to_twelve.as_slice()).await.unwrap();
 
-        assert_eq!(fh.read(0..4096).await, Ok(zero_to_twelve));
+        assert_eq!(fh.read(0, 4096).await, Ok(zero_to_twelve));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
             Ok(Some(vec![0, 1, 2, 3]))
@@ -340,6 +394,16 @@ mod tests {
         fh.flush().await.unwrap();
 
         let new_fh = FileHandle::create(&mem, 4, "meta").await.unwrap();
-        assert_eq!(new_fh.read(0..4096).await, Ok(vec![0, 1, 2, 3]));
+        assert_eq!(new_fh.read(0, 4096).await, Ok(vec![0, 1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn read_starts_past_data() {
+        let mem = Memory::default();
+        let mut fh = FileHandle::create(&mem, ONE_MB, "meta").await.unwrap();
+
+        assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
+
+        assert_eq!(fh.read(4, 4096).await, Err(IoError::OutOfRange));
     }
 }

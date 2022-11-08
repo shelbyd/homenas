@@ -88,8 +88,24 @@ where
 
             Ok(Box::new(out))
         }
+        Operation::Open(op) => {
+            let handle_id = fs.open(op.ino()).await?;
+
+            let mut out = reply::OpenOut::default();
+            out.fh(handle_id);
+
+            Ok(Box::new(out))
+        }
+        Operation::Flush(op) => {
+            fs.flush(op.ino()).await?;
+            Ok(Box::new(Vec::<u8>::new()))
+        }
+        Operation::Release(op) => {
+            fs.release(op.ino()).await?;
+            Ok(Box::new(Vec::<u8>::new()))
+        }
         Operation::Write(op, data) => {
-            let written = fs.write(op.ino(), op.offset(), data).await?;
+            let written = fs.write(op.ino(), op.offset(), op.size(), data).await?;
 
             let mut out = reply::WriteOut::default();
             out.size(written);
@@ -168,5 +184,7 @@ fn libc_error(io: IoError) -> libc::c_int {
         IoError::Parse => libc::EIO,
         IoError::Uncategorized => libc::EIO,
         IoError::InvalidData => libc::EIO,
+        IoError::TempUnavailable => libc::EAGAIN,
+        IoError::BadDescriptor => libc::EBADF,
     }
 }

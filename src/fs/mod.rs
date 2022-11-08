@@ -2,11 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ffi::OsString, time::Duration};
 
 mod file_handle;
-// use file_handle::*;
+use file_handle::*;
 
 mod file_system;
 pub use file_system::*;
 
+pub type HandleId = u64;
 pub type NodeId = u64;
 
 pub type IoResult<T> = Result<T, IoError>;
@@ -33,6 +34,10 @@ pub enum IoError {
     Uncategorized,
     #[error("invalid data")]
     InvalidData,
+    #[error("temporarily unavailable")]
+    TempUnavailable,
+    #[error("bad file descriptor")]
+    BadDescriptor,
 }
 
 // TODO(shelbyd): Delete and use std::io::Result.

@@ -1,16 +1,19 @@
-use std::{ffi::OsStr, io::BufRead};
+use dashmap::{mapref::entry::Entry as DashMapEntry, DashMap};
+use std::{ffi::OsStr, io::BufRead, sync::Arc};
 
 use super::*;
 use crate::object_store::{self, CborTyped, *};
 
 pub struct FileSystem<O> {
-    store: CborTyped<O>,
+    store: Arc<O>,
+    open_handles: DashMap<NodeId, FileHandle<Arc<O>>>,
 }
 
 impl<O> FileSystem<O> {
     pub fn new(store: O) -> Self {
         Self {
-            store: CborTyped::new(store),
+            store: Arc::new(store),
+            open_handles: Default::default(),
         }
     }
 }
@@ -21,6 +24,10 @@ enum Contents {
 }
 
 impl<O: ObjectStore> FileSystem<O> {
+    fn typed_store(&self) -> CborTyped<&Arc<O>> {
+        CborTyped::new(&self.store)
+    }
+
     pub async fn lookup(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
         let parent = self.read_entry(parent).await?;
 
@@ -40,7 +47,7 @@ impl<O: ObjectStore> FileSystem<O> {
         log::debug!("read_entry(node): {:?}", node);
 
         match self
-            .store
+            .typed_store()
             .get_typed::<Entry>(&format!("file/{}.meta", node))
             .await?
         {
@@ -57,7 +64,7 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     async fn write_entry(&self, entry: Entry) -> IoResult<()> {
-        self.store
+        self.typed_store()
             .set_typed(format!("file/{}.meta", entry.node_id), &entry)
             .await
     }
@@ -86,7 +93,7 @@ impl<O: ObjectStore> FileSystem<O> {
         let new_node_id = self.get_next_node_id().await?;
 
         let contents_location = format!("file/{}", new_node_id);
-        self.store
+        self.typed_store()
             .set_typed::<Contents>(contents_location, &Contents::Raw(Vec::new()))
             .await?;
 
@@ -113,7 +120,7 @@ impl<O: ObjectStore> FileSystem<O> {
         })
     }
 
-    async fn get_next_node_id(&self) -> IoResult<u64> {
+    async fn get_next_node_id(&self) -> IoResult<NodeId> {
         object_store::update_typed(&*self.store, "meta/next_node_id", |next| {
             let next = next.unwrap_or(2);
             Ok((next + 1, next))
@@ -121,49 +128,68 @@ impl<O: ObjectStore> FileSystem<O> {
         .await
     }
 
-    pub async fn write<B: BufRead>(&self, node: NodeId, offset: u64, mut data: B) -> IoResult<u32> {
-        if offset != 0 {
-            log::error!("write with offset: {}", offset);
-            return Err(IoError::Unimplemented);
+    pub async fn open(&self, node: NodeId) -> IoResult<HandleId> {
+        match self.open_handles.entry(node) {
+            DashMapEntry::Occupied(_) => Err(IoError::TempUnavailable),
+            DashMapEntry::Vacant(v) => {
+                let handle = FileHandle::create(
+                    Arc::clone(&self.store),
+                    1024 * 1024,
+                    &format!("file/{}.chunks", node),
+                )
+                .await?;
+
+                v.insert(handle);
+
+                Ok(node)
+            }
         }
+    }
 
-        let mut entry = self.read_entry(node).await?;
-        let file_data = entry.kind.as_file_mut().ok_or(IoError::NotAFile)?;
-
-        let mut vec = Vec::new();
-        let amount = data.read_to_end(&mut vec).unwrap();
-        file_data.size = amount as u64;
-
-        self.store
-            .set_typed::<Contents>(format!("file/{}", node), &Contents::Raw(vec))
-            .await?;
-        self.write_entry(entry).await?;
-
-        Ok(amount as u32)
+    pub async fn write<B: BufRead>(
+        &self,
+        node: NodeId,
+        offset: u64,
+        amount: u32,
+        data: B,
+    ) -> IoResult<u32> {
+        self.open_handles
+            .get_mut(&node)
+            .ok_or(IoError::BadDescriptor)?
+            .write(offset, amount, data)
+            .await
     }
 
     pub async fn read(&self, node: NodeId, offset: u64, amount: u32) -> IoResult<Vec<u8>> {
-        let offset = offset as usize;
+        self.open_handles
+            .get(&node)
+            .ok_or(IoError::BadDescriptor)?
+            .read(offset, amount)
+            .await
+    }
 
-        let contents = self
-            .store
-            .get_typed::<Contents>(&format!("file/{}", node))
-            .await?
-            .ok_or(IoError::NotFound)?;
+    pub async fn flush(&self, node: NodeId) -> IoResult<()> {
+        self.open_handles
+            .get_mut(&node)
+            .ok_or(IoError::BadDescriptor)?
+            .flush()
+            .await
+    }
 
-        let mut buf = match contents {
-            Contents::Raw(buf) => buf,
-        };
+    pub async fn release(&self, node: NodeId) -> IoResult<()> {
+        let mut handle = self
+            .open_handles
+            .remove(&node)
+            .ok_or(IoError::BadDescriptor)?
+            .1;
+        handle.flush().await?;
 
-        if offset > buf.len() {
-            return Err(IoError::OutOfRange);
-        }
+        let mut entry = self.read_entry(node).await?;
+        let file_data = entry.kind.as_file_mut().ok_or(IoError::NotAFile)?;
+        file_data.size = handle.size();
+        self.write_entry(entry).await?;
 
-        let mut offset = buf.split_off(offset);
-        let amount = core::cmp::min(amount, offset.len() as u32);
-        offset.truncate(amount as usize);
-
-        Ok(offset)
+        Ok(())
     }
 }
 
@@ -246,7 +272,8 @@ mod tests {
         let fs = FileSystem::new(mem_os);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
-        assert_eq!(fs.write(attrs.node_id, 0, &[1, 2, 3][..]).await, Ok(3));
+        fs.open(attrs.node_id).await.unwrap();
+        assert_eq!(fs.write(attrs.node_id, 0, 3, &[1, 2, 3][..]).await, Ok(3));
 
         assert_eq!(fs.read(attrs.node_id, 0, u32::MAX).await, Ok(vec![1, 2, 3]));
     }
@@ -257,7 +284,8 @@ mod tests {
         let fs = FileSystem::new(mem_os);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
-        fs.write(attrs.node_id, 0, &[1, 2, 3][..]).await.unwrap();
+        fs.open(attrs.node_id).await.unwrap();
+        fs.write(attrs.node_id, 0, 3, &[1, 2, 3][..]).await.unwrap();
 
         assert_eq!(fs.read(attrs.node_id, 3, u32::MAX).await, Ok(vec![]));
         assert_eq!(
@@ -272,7 +300,9 @@ mod tests {
         let fs = FileSystem::new(mem_os);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
-        assert_eq!(fs.write(attrs.node_id, 0, &[1, 2, 3][..]).await, Ok(3));
+        fs.open(attrs.node_id).await.unwrap();
+        assert_eq!(fs.write(attrs.node_id, 0, 3, &[1, 2, 3][..]).await, Ok(3));
+        fs.release(attrs.node_id).await.unwrap();
 
         let entry = fs.read_entry(attrs.node_id).await.unwrap();
         assert_eq!(entry.kind.as_file().unwrap().size, 3);
