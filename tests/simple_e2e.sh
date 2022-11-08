@@ -26,6 +26,9 @@ ls -lah $DIR
 rm $HELLO
 ls -lah $DIR
 
+mkdir -p "$DIR/foo/bar/baz"
+ls -lah $DIR
+
 killall homenas
 
 fusermount -u $DIR

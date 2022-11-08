@@ -57,7 +57,7 @@ impl<O: ObjectStore> FileSystem<O> {
         }
     }
 
-    async fn write_entry(&self, entry: Entry) -> IoResult<()> {
+    async fn write_entry(&self, entry: &Entry) -> IoResult<()> {
         self.typed_store()
             .set_typed(&format!("file/{}.meta", entry.node_id), &entry)
             .await
@@ -102,20 +102,25 @@ impl<O: ObjectStore> FileSystem<O> {
         Ok([node, fake_parent].into_iter().chain(children).collect())
     }
 
-    pub async fn create_file(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry<DetailedKind>> {
-        let new_node_id = self.get_next_node_id().await?;
-
-        let contents_location = format!("file/{}", new_node_id);
-        self.typed_store()
-            .set_typed::<Contents>(&contents_location, &Contents::Raw(Vec::new()))
-            .await?;
-
-        let file_entry = Entry {
+    pub async fn create_file(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
+        self.add_entry_to_parent(parent, name, |node_id| Entry {
             kind: DetailedKind::File(FileData { size: 0 }),
             name: name.to_owned(),
-            node_id: new_node_id,
-        };
-        self.write_entry(file_entry).await?;
+            node_id,
+        })
+        .await
+    }
+
+    async fn add_entry_to_parent(
+        &self,
+        parent: NodeId,
+        name: &OsStr,
+        entry: impl FnOnce(NodeId) -> Entry,
+    ) -> IoResult<Entry> {
+        let new_node_id = self.get_next_node_id().await?;
+        let entry = entry(new_node_id);
+
+        self.write_entry(&entry).await?;
 
         self.update_entry(parent, |parent| {
             parent
@@ -128,17 +133,24 @@ impl<O: ObjectStore> FileSystem<O> {
         })
         .await?;
 
-        Ok(Entry {
-            node_id: new_node_id,
-            kind: EntryKind::File(FileData { size: 0 }),
-            name: name.into(),
-        })
+        Ok(entry)
     }
 
     async fn get_next_node_id(&self) -> IoResult<NodeId> {
         object_store::update_typed(&*self.store, "meta/next_node_id", |next| {
             let next = next.unwrap_or(2);
             Ok((next + 1, next))
+        })
+        .await
+    }
+
+    pub async fn create_dir(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
+        self.add_entry_to_parent(parent, name, |node_id| Entry {
+            kind: DetailedKind::Directory(DirectoryData {
+                children: Default::default(),
+            }),
+            name: name.to_owned(),
+            node_id,
         })
         .await
     }

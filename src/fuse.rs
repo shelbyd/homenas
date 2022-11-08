@@ -59,14 +59,7 @@ where
     match op {
         Operation::Lookup(op) => {
             let entry = fs.lookup(op.parent(), op.name()).await?;
-
-            let mut out = reply::EntryOut::default();
-            out.ino(entry.node_id);
-            file_attr(entry, out.attr());
-            out.ttl_attr(Duration::from_secs(1));
-            out.ttl_entry(Duration::from_secs(1));
-
-            Ok(Box::new(out))
+            Ok(Box::new(entry_out(entry)))
         }
         Operation::Getattr(op) => {
             let entry = fs.read_entry(op.ino()).await?;
@@ -133,20 +126,17 @@ where
         Operation::Mknod(op) => match node_type(op.mode())? {
             EntryKind::File(()) => {
                 let entry = fs.create_file(op.parent(), op.name()).await?;
-
-                let mut out = reply::EntryOut::default();
-                out.ino(entry.node_id);
-                file_attr(entry, out.attr());
-                out.ttl_attr(Duration::from_secs(1));
-                out.ttl_entry(Duration::from_secs(1));
-
-                Ok(Box::new(out))
+                Ok(Box::new(entry_out(entry)))
             }
             file_type => {
                 log::warn!("Unhandled operation: Mknod {:?}", file_type);
                 Err(IoError::Unimplemented)
             }
         },
+        Operation::Mkdir(op) => {
+            let entry = fs.create_dir(op.parent(), op.name()).await?;
+            Ok(Box::new(entry_out(entry)))
+        }
         Operation::Unlink(op) => {
             fs.unlink(op.parent(), op.name()).await?;
             Ok(Box::new(Vec::<u8>::new()))
@@ -163,6 +153,17 @@ where
             Err(IoError::Unimplemented)
         }
     }
+}
+
+fn entry_out(entry: Entry) -> reply::EntryOut {
+    let mut out = reply::EntryOut::default();
+    out.ino(entry.node_id);
+    file_attr(entry, out.attr());
+
+    out.ttl_attr(Duration::from_secs(1));
+    out.ttl_entry(Duration::from_secs(1));
+
+    out
 }
 
 fn file_attr(entry: Entry, attr: &mut reply::FileAttr) {
