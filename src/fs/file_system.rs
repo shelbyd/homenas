@@ -15,6 +15,11 @@ impl<O> FileSystem<O> {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+enum Contents {
+    Raw(Vec<u8>),
+}
+
 impl<O: ObjectStore> FileSystem<O> {
     pub async fn lookup(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
         let parent = self.read_entry(parent).await?;
@@ -81,7 +86,9 @@ impl<O: ObjectStore> FileSystem<O> {
         let new_node_id = self.get_next_node_id().await?;
 
         let contents_location = format!("file/{}", new_node_id);
-        self.store.set(contents_location, Vec::new()).await?;
+        self.store
+            .set_typed::<Contents>(contents_location, &Contents::Raw(Vec::new()))
+            .await?;
 
         let file_entry = Entry {
             kind: DetailedKind::File(FileData { size: 0 }),
@@ -124,7 +131,7 @@ impl<O: ObjectStore> FileSystem<O> {
         let amount = data.read_to_end(&mut vec).unwrap();
         file_data.size = amount as u64;
 
-        self.store.set(format!("file/{}", node), vec).await?;
+        self.store.set_typed::<Contents>(format!("file/{}", node), &Contents::Raw(vec)).await?;
         self.write_entry(entry).await?;
 
         Ok(amount as u32)
@@ -133,17 +140,21 @@ impl<O: ObjectStore> FileSystem<O> {
     pub async fn read(&self, node: NodeId, offset: u64, amount: u32) -> IoResult<Vec<u8>> {
         let offset = offset as usize;
 
-        let mut contents = self
+        let contents = self
             .store
-            .get(&format!("file/{}", node))
+            .get_typed::<Contents>(&format!("file/{}", node))
             .await?
             .ok_or(IoError::NotFound)?;
 
-        if offset > contents.len() {
+        let mut buf = match contents {
+            Contents::Raw(buf) => buf,
+        };
+
+        if offset > buf.len() {
             return Err(IoError::OutOfRange);
         }
 
-        let mut offset = contents.split_off(offset);
+        let mut offset = buf.split_off(offset);
         let amount = core::cmp::min(amount, offset.len() as u32);
         offset.truncate(amount as usize);
 
