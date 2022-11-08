@@ -24,8 +24,13 @@ impl ObjectStore for Memory {
         Ok(())
     }
 
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        Ok(self.inner.read().unwrap().get(key).cloned())
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
+        self.inner
+            .read()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .ok_or(IoError::NotFound)
     }
 
     async fn clear(&self, key: &str) -> IoResult<()> {

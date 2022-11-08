@@ -135,26 +135,25 @@ where
         Ok(())
     }
 
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        use futures::FutureExt;
-
-        if let Some(v) = self.backing.get(key).await? {
-            return Ok(Some(v));
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
+        if let Some(v) = self.backing.get(key).await.into_found()? {
+            return Ok(v);
         }
 
         if self.peers.len() > 0 {
-            let found = futures::future::select_ok(self.peers.iter().map(|p| {
-                p.request::<Fetch>(Request::Fetch(key.to_string()))
-                    .map(|response| response?.0.ok_or(IoError::NotFound))
-            }))
+            let found = futures::future::select_ok(
+                self.peers
+                    .iter()
+                    .map(|p| p.request::<Fetch>(Request::Fetch(key.to_string()))),
+            )
             .await;
 
-            if let Ok((found, _)) = found {
-                return Ok(Some(found));
+            if let Ok((resp, _)) = found {
+                return Ok(resp.0);
             }
         }
 
-        Ok(None)
+        Err(IoError::NotFound)
     }
 
     async fn clear(&self, key: &str) -> IoResult<()> {
@@ -212,7 +211,7 @@ mod response {
     use super::*;
 
     #[derive(Serialize, Deserialize, Debug)]
-    pub struct Fetch(pub Option<Vec<u8>>);
+    pub struct Fetch(pub Vec<u8>);
 }
 
 // TODO(shelbyd): Can make private?
@@ -378,7 +377,7 @@ mod tests {
 
         net.set("foo", b"bar").await.unwrap();
 
-        assert_eq!(net.backing.get("foo").await.unwrap(), Some(b"bar".to_vec()));
+        assert_eq!(net.backing.get("foo").await.unwrap(), b"bar".to_vec());
     }
 
     #[tokio::test]
@@ -392,7 +391,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(net.backing.get("foo").await.unwrap(), Some(b"bar".to_vec()));
+        assert_eq!(net.backing.get("foo").await.unwrap(), b"bar".to_vec());
     }
 
     #[tokio::test]
@@ -404,7 +403,7 @@ mod tests {
 
         net.backing.set("foo", b"bar").await.unwrap();
 
-        assert_eq!(net.get("foo").await.unwrap(), Some(b"bar".to_vec()));
+        assert_eq!(net.get("foo").await.unwrap(), b"bar".to_vec());
     }
 
     #[tokio::test]
@@ -417,7 +416,7 @@ mod tests {
         peer.respond(|m| match m {
             Request::Fetch(key) => {
                 assert_eq!(&key, "foo");
-                Some(TestPeer::ser(Fetch(Some(b"bar".to_vec()))))
+                Some(TestPeer::ser(Fetch(b"bar".to_vec())))
             }
 
             #[allow(unreachable_patterns)]
@@ -427,7 +426,7 @@ mod tests {
             }
         });
 
-        assert_eq!(net.get("foo").await.unwrap(), Some(b"bar".to_vec()));
+        assert_eq!(net.get("foo").await.unwrap(), b"bar".to_vec());
     }
 
     #[tokio::test]
@@ -458,7 +457,7 @@ mod tests {
             net.request(Request::Fetch("foo".to_string()))
                 .await
                 .map(|ser| cbor_ser(&ser)),
-            Ok(serde_cbor::to_vec(&Fetch(Some(b"bar".to_vec()))).unwrap())
+            Ok(serde_cbor::to_vec(&Fetch(b"bar".to_vec())).unwrap())
         );
     }
 }

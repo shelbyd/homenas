@@ -17,7 +17,7 @@ use crate::fs::{IoError, IoResult};
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()>;
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>>;
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>>;
     async fn clear(&self, key: &str) -> IoResult<()>;
 
     /// Currently does not support strong compare_exchange semantics.
@@ -37,7 +37,7 @@ where
     R: Send,
 {
     loop {
-        let read = store.get(&key).await?;
+        let read = store.get(&key).await.into_found()?;
         let read = read.as_ref().map(|vec| vec.as_slice());
         let (new, ret) = f(read)?;
         if store.compare_exchange(&key, read, &new).await? {
@@ -67,6 +67,20 @@ pub struct Location {
     disk: DiskId,
 }
 
+pub trait ResultExt<T> {
+    fn into_found(self) -> Result<Option<T>, IoError>;
+}
+
+impl<T> ResultExt<T> for Result<T, IoError> {
+    fn into_found(self) -> Result<Option<T>, IoError> {
+        match self {
+            Ok(t) => Ok(Some(t)),
+            Err(IoError::NotFound) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl<'o, O> ObjectStore for &'o O
 where
@@ -75,7 +89,7 @@ where
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
         (**self).get(key).await
     }
     async fn clear(&self, key: &str) -> IoResult<()> {
@@ -100,7 +114,7 @@ where
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
         (**self).get(key).await
     }
     async fn clear(&self, key: &str) -> IoResult<()> {
@@ -122,7 +136,7 @@ impl ObjectStore for Box<dyn ObjectStore> {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
         (**self).get(key).await
     }
     async fn clear(&self, key: &str) -> IoResult<()> {

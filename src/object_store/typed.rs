@@ -32,14 +32,11 @@ where
         self.backing.set(key, &ser(t)?).await
     }
 
-    pub async fn get_typed<T>(&self, key: &str) -> IoResult<Option<T>>
+    pub async fn get_typed<T>(&self, key: &str) -> IoResult<T>
     where
         T: DeserializeOwned,
     {
-        match self.backing.get(key).await? {
-            None => Ok(None),
-            Some(read) => Ok(Some(de(&read)?)),
-        }
+        de(&self.backing.get(key).await?)
     }
 }
 

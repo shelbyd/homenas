@@ -49,7 +49,8 @@ impl<O: ObjectStore> FileSystem<O> {
         match self
             .typed_store()
             .get_typed::<Entry>(&format!("file/{}.meta", node))
-            .await?
+            .await
+            .into_found()?
         {
             Some(e) => Ok(e),
             None if node == 1 => return Ok(root_entry()),

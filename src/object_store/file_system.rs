@@ -37,10 +37,10 @@ impl ObjectStore for FileSystem {
         Ok(())
     }
 
-    async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
         match fs::read(self.path.join(key)).await {
-            Ok(buf) => Ok(Some(buf)),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Ok(buf) => Ok(buf),
+            Err(e) if e.kind() == ErrorKind::NotFound => Err(IoError::NotFound),
             Err(e) => Err(e.into()),
         }
     }
@@ -110,7 +110,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let fs = FileSystem::new(dir.path());
 
-        assert_eq!(fs.get("foo").await, Ok(None));
+        assert_eq!(fs.get("foo").await, Err(IoError::NotFound));
     }
 
     #[tokio::test]
@@ -120,7 +120,7 @@ mod tests {
 
         fs.set("foo", b"bar").await.unwrap();
 
-        assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+        assert_eq!(fs.get("foo").await, Ok(bar()));
     }
 
     #[tokio::test]
@@ -130,7 +130,7 @@ mod tests {
 
         fs.set("foo/bar/baz", b"bar").await.unwrap();
 
-        assert_eq!(fs.get("foo/bar/baz").await, Ok(Some(bar())));
+        assert_eq!(fs.get("foo/bar/baz").await, Ok(bar()));
     }
 
     #[cfg(test)]
@@ -143,7 +143,7 @@ mod tests {
             let fs = FileSystem::new(dir.path());
 
             assert_eq!(fs.compare_exchange("foo", None, b"bar").await, Ok(true));
-            assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+            assert_eq!(fs.get("foo").await, Ok(bar()));
         }
 
         #[tokio::test]
@@ -154,7 +154,7 @@ mod tests {
             fs.set("foo", b"bar").await.unwrap();
 
             assert_eq!(fs.compare_exchange("foo", None, b"baz").await, Ok(false));
-            assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+            assert_eq!(fs.get("foo").await, Ok(bar()));
         }
 
         #[tokio::test]
@@ -166,7 +166,7 @@ mod tests {
                 fs.compare_exchange("foo", Some(b"bar"), b"bar").await,
                 Ok(false)
             );
-            assert_eq!(fs.get("foo").await, Ok(None));
+            assert_eq!(fs.get("foo").await, Err(IoError::NotFound));
         }
 
         #[tokio::test]
@@ -180,7 +180,7 @@ mod tests {
                 fs.compare_exchange("foo", Some(b"baz"), b"bar").await,
                 Ok(false)
             );
-            assert_eq!(fs.get("foo").await, Ok(Some(bar())));
+            assert_eq!(fs.get("foo").await, Ok(bar()));
         }
 
         #[tokio::test]
@@ -194,7 +194,7 @@ mod tests {
                 fs.compare_exchange("foo", Some(b"bar"), b"baz").await,
                 Ok(true)
             );
-            assert_eq!(fs.get("foo").await, Ok(Some(b"baz".to_vec())));
+            assert_eq!(fs.get("foo").await, Ok(b"baz".to_vec()));
         }
     }
 }

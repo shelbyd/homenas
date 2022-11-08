@@ -39,7 +39,8 @@ impl<O: ObjectStore> FileHandle<O> {
 
         let ids = store
             .get_typed::<ChunkIds>(meta_key)
-            .await?
+            .await
+            .into_found()?
             .unwrap_or_else(|| ChunkIds::new(chunk_size));
 
         if chunk_size != ids.chunk_size {
@@ -83,12 +84,7 @@ impl<O: ObjectStore> FileHandle<O> {
                 None => return Ok(ret),
 
                 Some(Chunk::InMemory(v, _)) => Cow::Borrowed(v),
-                Some(c @ Chunk::Ref(_)) => Cow::Owned(
-                    self.store
-                        .get(&c.storage_key())
-                        .await?
-                        .ok_or(IoError::NotFound)?,
-                ),
+                Some(c @ Chunk::Ref(_)) => Cow::Owned(self.store.get(&c.storage_key()).await?),
             };
 
             if buf_start > buf.len() {
@@ -256,10 +252,7 @@ impl Chunk {
             Chunk::Ref(ref_) => {
                 let id = ref_.id.clone();
 
-                let read = store
-                    .get(&self.storage_key())
-                    .await?
-                    .ok_or(IoError::NotFound)?;
+                let read = store.get(&self.storage_key()).await?;
                 *self = Chunk::InMemory(read, Some(id));
 
                 match self {
@@ -361,7 +354,7 @@ mod tests {
         assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4]));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
-            Ok(Some(vec![1, 2, 3, 4]))
+            Ok(vec![1, 2, 3, 4])
         );
     }
 
@@ -376,7 +369,7 @@ mod tests {
         assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4]));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
-            Ok(Some(vec![1, 2, 3, 4]))
+            Ok(vec![1, 2, 3, 4])
         );
     }
 
@@ -391,7 +384,7 @@ mod tests {
         assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4, 5, 6]));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
-            Ok(Some(vec![1, 2, 3, 4]))
+            Ok(vec![1, 2, 3, 4])
         );
     }
 
@@ -406,15 +399,15 @@ mod tests {
         assert_eq!(fh.read(0, 4096).await, Ok(zero_to_twelve));
         assert_eq!(
             mem.get(&fh.chunk_key(0).unwrap()).await,
-            Ok(Some(vec![0, 1, 2, 3]))
+            Ok(vec![0, 1, 2, 3])
         );
         assert_eq!(
             mem.get(&fh.chunk_key(1).unwrap()).await,
-            Ok(Some(vec![4, 5, 6, 7]))
+            Ok(vec![4, 5, 6, 7])
         );
         assert_eq!(
             mem.get(&fh.chunk_key(2).unwrap()).await,
-            Ok(Some(vec![8, 9, 10, 11]))
+            Ok(vec![8, 9, 10, 11])
         );
     }
 
