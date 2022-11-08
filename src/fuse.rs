@@ -167,5 +167,6 @@ fn libc_error(io: IoError) -> libc::c_int {
         IoError::Io => libc::EIO,
         IoError::Parse => libc::EIO,
         IoError::Uncategorized => libc::EIO,
+        IoError::InvalidData => libc::EIO,
     }
 }

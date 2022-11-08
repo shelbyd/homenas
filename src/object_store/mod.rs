@@ -9,7 +9,10 @@ pub use memory::*;
 pub mod network;
 pub use network::*;
 
-use crate::fs::IoResult;
+pub mod typed;
+pub use typed::*;
+
+use crate::fs::{IoError, IoResult};
 
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {
@@ -25,17 +28,17 @@ pub trait ObjectStore: Send + Sync {
 }
 
 /// Update the value at the provided key. May retry until successful.
-pub async fn update<R, F, O>(store: &O, key: &str, mut f: F) -> IoResult<(Vec<u8>, R)>
+pub async fn update<R, F, O>(store: &O, key: &str, mut f: F) -> IoResult<R>
 where
     O: ObjectStore,
-    F: for<'v> FnMut(Option<&'v [u8]>) -> (Vec<u8>, R) + Send,
+    F: for<'v> FnMut(Option<&'v [u8]>) -> IoResult<(Vec<u8>, R)> + Send,
     R: Send,
 {
     loop {
         let read = store.get(&key).await?;
-        let (new, ret) = f(read.as_ref().map(|vec| vec.as_slice()));
-        if store.compare_exchange(&key, read, new.clone()).await? {
-            return Ok((new, ret));
+        let (new, ret) = f(read.as_ref().map(|vec| vec.as_slice()))?;
+        if store.compare_exchange(&key, read, new).await? {
+            return Ok(ret);
         }
     }
 }

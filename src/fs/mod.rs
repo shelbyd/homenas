@@ -28,6 +28,8 @@ pub enum IoError {
     Parse,
     #[error("uncategorized")]
     Uncategorized,
+    #[error("invalid data")]
+    InvalidData,
 }
 
 // TODO(shelbyd): Delete and use std::io::Result.

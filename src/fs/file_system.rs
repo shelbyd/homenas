@@ -1,15 +1,17 @@
 use std::{ffi::OsStr, io::BufRead};
 
 use super::*;
-use crate::object_store::{self, *};
+use crate::object_store::{self, CborTyped, *};
 
 pub struct FileSystem<O> {
-    store: O,
+    store: CborTyped<O>,
 }
 
 impl<O> FileSystem<O> {
     pub fn new(store: O) -> Self {
-        Self { store }
+        Self {
+            store: CborTyped::new(store),
+        }
     }
 }
 
@@ -32,8 +34,12 @@ impl<O: ObjectStore> FileSystem<O> {
     pub async fn read_entry(&self, node: NodeId) -> IoResult<Entry> {
         log::debug!("read_entry(node): {:?}", node);
 
-        let read = match self.store.get(&format!("file/{}.meta", node)).await? {
-            Some(r) => r,
+        match self
+            .store
+            .get_typed::<Entry>(&format!("file/{}.meta", node))
+            .await?
+        {
+            Some(e) => Ok(e),
             None if node == 1 => {
                 return Ok(Entry {
                     node_id: 1,
@@ -42,16 +48,12 @@ impl<O: ObjectStore> FileSystem<O> {
                 });
             }
             None => unreachable!("parent has broken link to child"),
-        };
-        Ok(serde_cbor::from_slice(&read).unwrap())
+        }
     }
 
     async fn write_entry(&self, entry: Entry) -> IoResult<()> {
         self.store
-            .set(
-                format!("file/{}.meta", entry.node_id),
-                serde_cbor::to_vec(&entry).unwrap(),
-            )
+            .set_typed(format!("file/{}.meta", entry.node_id), &entry)
             .await
     }
 
@@ -78,8 +80,8 @@ impl<O: ObjectStore> FileSystem<O> {
     pub async fn create_file(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry<DetailedKind>> {
         let new_node_id = self.get_next_node_id().await?;
 
-        let file_location = format!("file/{}", new_node_id);
-        self.store.set(file_location, Vec::new()).await?;
+        let contents_location = format!("file/{}", new_node_id);
+        self.store.set(contents_location, Vec::new()).await?;
 
         let file_entry = Entry {
             kind: DetailedKind::File(FileData { size: 0 }),
@@ -105,16 +107,11 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     async fn get_next_node_id(&self) -> IoResult<u64> {
-        Ok(
-            object_store::update(&self.store, "meta/next_node_id", |next| {
-                let next = next
-                    .map(|bytes| serde_cbor::from_slice(bytes).unwrap())
-                    .unwrap_or(2);
-                (serde_cbor::to_vec(&(next + 1)).unwrap(), next)
-            })
-            .await?
-            .1,
-        )
+        object_store::update_typed(&*self.store, "meta/next_node_id", |next| {
+            let next = next.unwrap_or(2);
+            Ok((next + 1, next))
+        })
+        .await
     }
 
     pub async fn write<B: BufRead>(&self, node: NodeId, offset: u64, mut data: B) -> IoResult<u32> {
