@@ -175,26 +175,12 @@ impl<O: ObjectStore> FileHandle<O> {
         let mut chunk_ids = ChunkIds::new(self.chunk_size);
 
         for (offset, chunk) in &mut self.chunks {
-            let ref_ = match chunk {
-                Chunk::Ref(r) => r.clone(),
-                Chunk::InMemory(buf) => {
-                    let owned = buf.clone();
-                    let ref_ = ChunkRef {
-                        size: buf.len() as u32,
-                        id: chunk.id(),
-                    };
-
-                    self.store.set(chunk.storage_key(), owned).await?;
-
-                    *chunk = Chunk::Ref(ref_.clone());
-                    ref_
-                }
-            };
-            chunk_ids.chunks.insert(*offset, ref_);
+            chunk.flush(&self.store).await?;
+            chunk_ids.chunks.insert(*offset, chunk.ref_());
         }
 
         self.store
-            .set_typed::<ChunkIds>(self.meta_key.clone(), &chunk_ids)
+            .set_typed::<ChunkIds>(&self.meta_key, &chunk_ids)
             .await
     }
 
@@ -230,7 +216,7 @@ impl Chunk {
                 let ref_ = self.ref_();
 
                 log::info!("{}: Flushing chunk", self.id());
-                store.set(self.storage_key(), owned).await?;
+                store.set(&self.storage_key(), &owned).await?;
 
                 *self = Chunk::Ref(ref_);
             }

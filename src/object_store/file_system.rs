@@ -30,7 +30,7 @@ impl FileSystem {
 
 #[async_trait::async_trait]
 impl ObjectStore for FileSystem {
-    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
+    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         let path = self.writable_path(&key).await?;
         fs::write(path, &value).await?;
 
@@ -48,8 +48,8 @@ impl ObjectStore for FileSystem {
     async fn compare_exchange(
         &self,
         key: &str,
-        current: Option<Vec<u8>>,
-        new: Vec<u8>,
+        current: Option<&[u8]>,
+        new: &[u8],
     ) -> IoResult<bool> {
         let path = self.writable_path(&key).await?;
         let mut file = match current {
@@ -113,7 +113,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let fs = FileSystem::new(dir.path());
 
-        fs.set("foo".to_string(), bar()).await.unwrap();
+        fs.set("foo", b"bar").await.unwrap();
 
         assert_eq!(fs.get("foo").await, Ok(Some(bar())));
     }
@@ -123,7 +123,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let fs = FileSystem::new(dir.path());
 
-        fs.set("foo/bar/baz".to_string(), bar()).await.unwrap();
+        fs.set("foo/bar/baz", b"bar").await.unwrap();
 
         assert_eq!(fs.get("foo/bar/baz").await, Ok(Some(bar())));
     }
@@ -137,7 +137,7 @@ mod tests {
             let dir = tempdir().unwrap();
             let fs = FileSystem::new(dir.path());
 
-            assert_eq!(fs.compare_exchange("foo", None, bar()).await, Ok(true));
+            assert_eq!(fs.compare_exchange("foo", None, b"bar").await, Ok(true));
             assert_eq!(fs.get("foo").await, Ok(Some(bar())));
         }
 
@@ -146,10 +146,10 @@ mod tests {
             let dir = tempdir().unwrap();
             let fs = FileSystem::new(dir.path());
 
-            fs.set("foo".to_string(), bar()).await.unwrap();
+            fs.set("foo", b"bar").await.unwrap();
 
             assert_eq!(
-                fs.compare_exchange("foo", None, b"baz".to_vec()).await,
+                fs.compare_exchange("foo", None, b"baz").await,
                 Ok(false)
             );
             assert_eq!(fs.get("foo").await, Ok(Some(bar())));
@@ -161,7 +161,7 @@ mod tests {
             let fs = FileSystem::new(dir.path());
 
             assert_eq!(
-                fs.compare_exchange("foo", Some(bar()), bar()).await,
+                fs.compare_exchange("foo", Some(b"bar"), b"bar").await,
                 Ok(false)
             );
             assert_eq!(fs.get("foo").await, Ok(None));
@@ -172,10 +172,10 @@ mod tests {
             let dir = tempdir().unwrap();
             let fs = FileSystem::new(dir.path());
 
-            fs.set("foo".to_string(), bar()).await.unwrap();
+            fs.set("foo", b"bar").await.unwrap();
 
             assert_eq!(
-                fs.compare_exchange("foo", Some(b"baz".to_vec()), bar())
+                fs.compare_exchange("foo", Some(b"baz"), b"bar")
                     .await,
                 Ok(false)
             );
@@ -187,10 +187,10 @@ mod tests {
             let dir = tempdir().unwrap();
             let fs = FileSystem::new(dir.path());
 
-            fs.set("foo".to_string(), bar()).await.unwrap();
+            fs.set("foo", b"bar").await.unwrap();
 
             assert_eq!(
-                fs.compare_exchange("foo", Some(bar()), b"baz".to_vec())
+                fs.compare_exchange("foo", Some(b"bar"), b"baz")
                     .await,
                 Ok(true)
             );

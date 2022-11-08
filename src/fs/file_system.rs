@@ -65,7 +65,7 @@ impl<O: ObjectStore> FileSystem<O> {
 
     async fn write_entry(&self, entry: Entry) -> IoResult<()> {
         self.typed_store()
-            .set_typed(format!("file/{}.meta", entry.node_id), &entry)
+            .set_typed(&format!("file/{}.meta", entry.node_id), &entry)
             .await
     }
 
@@ -94,7 +94,7 @@ impl<O: ObjectStore> FileSystem<O> {
 
         let contents_location = format!("file/{}", new_node_id);
         self.typed_store()
-            .set_typed::<Contents>(contents_location, &Contents::Raw(Vec::new()))
+            .set_typed::<Contents>(&contents_location, &Contents::Raw(Vec::new()))
             .await?;
 
         let file_entry = Entry {

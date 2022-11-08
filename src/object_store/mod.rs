@@ -16,15 +16,15 @@ use crate::fs::{IoError, IoResult};
 
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {
-    // TODO(shelbyd): Pass value as &[u8].
-    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()>;
+    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()>;
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>>;
 
+    /// Currently does not support strong compare_exchange semantics.
     async fn compare_exchange(
         &self,
         key: &str,
-        current: Option<Vec<u8>>,
-        new: Vec<u8>,
+        current: Option<&[u8]>,
+        new: &[u8],
     ) -> IoResult<bool>;
 }
 
@@ -37,8 +37,9 @@ where
 {
     loop {
         let read = store.get(&key).await?;
-        let (new, ret) = f(read.as_ref().map(|vec| vec.as_slice()))?;
-        if store.compare_exchange(&key, read, new).await? {
+        let read = read.as_ref().map(|vec| vec.as_slice());
+        let (new, ret) = f(read)?;
+        if store.compare_exchange(&key, read, &new).await? {
             return Ok(ret);
         }
     }
@@ -70,19 +71,18 @@ impl<'o, O> ObjectStore for &'o O
 where
     O: ObjectStore,
 {
-    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
+    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         (**self).get(key).await
     }
 
-    /// Currently does not implement actual compare_exchange semantics for all ObjectStores.
     async fn compare_exchange(
         &self,
         key: &str,
-        current: Option<Vec<u8>>,
-        new: Vec<u8>,
+        current: Option<&[u8]>,
+        new: &[u8],
     ) -> IoResult<bool> {
         (**self).compare_exchange(key, current, new).await
     }
@@ -93,19 +93,18 @@ impl<O> ObjectStore for std::sync::Arc<O>
 where
     O: ObjectStore,
 {
-    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
+    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         (**self).get(key).await
     }
 
-    /// Currently does not implement actual compare_exchange semantics for all ObjectStores.
     async fn compare_exchange(
         &self,
         key: &str,
-        current: Option<Vec<u8>>,
-        new: Vec<u8>,
+        current: Option<&[u8]>,
+        new: &[u8],
     ) -> IoResult<bool> {
         (**self).compare_exchange(key, current, new).await
     }
@@ -113,19 +112,18 @@ where
 
 #[async_trait::async_trait]
 impl ObjectStore for Box<dyn ObjectStore> {
-    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
+    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         (**self).get(key).await
     }
 
-    /// Currently does not implement actual compare_exchange semantics for all ObjectStores.
     async fn compare_exchange(
         &self,
         key: &str,
-        current: Option<Vec<u8>>,
-        new: Vec<u8>,
+        current: Option<&[u8]>,
+        new: &[u8],
     ) -> IoResult<bool> {
         (**self).compare_exchange(key, current, new).await
     }

@@ -25,11 +25,11 @@ impl<O> CborTyped<O>
 where
     O: ObjectStore,
 {
-    pub async fn set_typed<T>(&self, key: String, t: &T) -> IoResult<()>
+    pub async fn set_typed<T>(&self, key: &str, t: &T) -> IoResult<()>
     where
         T: Serialize,
     {
-        self.backing.set(key, ser(t)?).await
+        self.backing.set(key, &ser(t)?).await
     }
 
     pub async fn get_typed<T>(&self, key: &str) -> IoResult<Option<T>>

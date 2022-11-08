@@ -9,8 +9,11 @@ pub struct Memory {
 
 #[async_trait::async_trait]
 impl ObjectStore for Memory {
-    async fn set(&self, key: String, value: Vec<u8>) -> IoResult<()> {
-        self.inner.write().unwrap().insert(key, value);
+    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
+        self.inner
+            .write()
+            .unwrap()
+            .insert(key.to_string(), value.to_vec());
         Ok(())
     }
 
@@ -21,16 +24,16 @@ impl ObjectStore for Memory {
     async fn compare_exchange(
         &self,
         key: &str,
-        current: Option<Vec<u8>>,
-        new: Vec<u8>,
+        current: Option<&[u8]>,
+        new: &[u8],
     ) -> IoResult<bool> {
         let mut write = self.inner.write().unwrap();
         let actual_current = write.get(key);
-        if actual_current != current.as_ref() {
+        if actual_current.map(Vec::as_slice) != current {
             return Ok(false);
         }
 
-        write.insert(key.to_string(), new);
+        write.insert(key.to_string(), new.to_vec());
         Ok(true)
     }
 }
