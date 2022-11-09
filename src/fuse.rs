@@ -220,5 +220,6 @@ fn libc_error(io: IoError) -> libc::c_int {
         IoError::InvalidData => libc::EIO,
         IoError::TempUnavailable => libc::EAGAIN,
         IoError::BadDescriptor => libc::EBADF,
+        IoError::Internal => libc::EIO,
     }
 }

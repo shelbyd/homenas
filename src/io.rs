@@ -28,6 +28,8 @@ pub enum IoError {
     TempUnavailable,
     #[error("bad file descriptor")]
     BadDescriptor,
+    #[error("internal error")]
+    Internal,
 }
 
 // TODO(shelbyd): Delete and use std::io::Result.

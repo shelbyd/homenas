@@ -17,6 +17,7 @@ hex = "0.4.3"
 libc = "0.2.137"
 log = "0.4.17"
 maplit = "1.0.2"
+nonempty = "0.8.0"
 polyfuse = "0.4.1"
 rand = "0.8.5"
 serde = { version = "1.0.147", features = ["derive"] }
