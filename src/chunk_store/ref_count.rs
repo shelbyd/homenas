@@ -30,7 +30,7 @@ impl<C: ChunkStore> RefCount<C> {
     ) -> IoResult<R> {
         update_typed(
             self.backing.object(),
-            &self.meta_key,
+            &format!("{}/ref-counts", self.meta_key),
             |meta: Option<ChunkMeta>| {
                 let mut meta = meta.unwrap_or_default();
 
@@ -55,7 +55,7 @@ where
     }
 
     async fn store(&self, chunk: &[u8]) -> IoResult<String> {
-        let id = hex::encode(blake3::hash(chunk).as_bytes());
+        let id = id_for(chunk);
 
         let ref_count = self
             .update_meta(&id, |meta| {

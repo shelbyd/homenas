@@ -16,7 +16,9 @@ pub fn chunk_storage_key(id: &str) -> String {
     format!("chunks/{}", location)
 }
 
-// TODO(shelbyd): Shared id_for_chunk function.
+pub fn id_for(chunk: &[u8]) -> String {
+    hex::encode(blake3::hash(chunk).as_bytes())
+}
 
 #[async_trait::async_trait]
 pub trait ChunkStore: Send + Sync {
@@ -86,7 +88,7 @@ where
         self.backing.get(&self.storage_key(id)).await
     }
     async fn store(&self, chunk: &[u8]) -> IoResult<String> {
-        let id = hex::encode(blake3::hash(chunk).as_bytes());
+        let id = id_for(chunk);
         self.backing.set(&self.storage_key(&id), chunk).await?;
         Ok(id)
     }
