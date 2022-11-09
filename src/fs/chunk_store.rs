@@ -16,7 +16,7 @@ struct ChunkMeta {
 }
 
 pub fn chunk_storage_key(id: &str) -> String {
-    let location = if id.len() >= 4 {
+    let location = if id.len() >= 5 {
         format!("{}/{}", &id[..4], &id[4..])
     } else {
         id.to_string()
@@ -40,14 +40,22 @@ impl<O: ObjectStore> ChunkStore<O> {
 
     pub async fn store(&self, chunk: &[u8]) -> IoResult<String> {
         let id = hex::encode(blake3::hash(chunk).as_bytes());
-        log::info!("{}: Flushing chunk", id);
 
-        self.backing.set(&chunk_storage_key(&id), chunk).await?;
+        let ref_count = self
+            .update_meta(&id, |meta| {
+                let entry = meta.counts.entry(id.to_string()).or_default();
+                *entry += 1;
+                *entry
+            })
+            .await?;
 
-        self.update_meta(&id, |meta| {
-            *meta.counts.entry(id.to_string()).or_default() += 1;
-        })
-        .await?;
+        let newly_created = ref_count == 1;
+        if newly_created {
+            log::info!("{}: Flushing chunk", id);
+            self.backing.set(&chunk_storage_key(&id), chunk).await?;
+        } else {
+            log::info!("{}: Already stored, not setting", id);
+        }
 
         Ok(id)
     }
@@ -83,7 +91,10 @@ impl<O: ObjectStore> ChunkStore<O> {
             .await?;
 
         if ref_count == 0 {
+            log::info!("{}: Dropping chunk", id);
             self.backing.clear(&chunk_storage_key(id)).await?;
+        } else {
+            log::info!("{}: Still has ref-count {}", id, ref_count);
         }
 
         Ok(())
@@ -167,5 +178,17 @@ mod tests {
         store.drop(&id).await.unwrap();
 
         assert_eq!(store.read(&id).await, Ok(vec![0, 1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn double_store_does_not_set() {
+        let mem = Memory::default();
+        let store = ChunkStore::new(&mem, "meta");
+
+        let id = store.store(&[0, 1, 2, 3]).await.unwrap();
+        mem.clear(&chunk_storage_key(&id)).await.unwrap();
+
+        store.store(&[0, 1, 2, 3]).await.unwrap();
+        assert!(!mem.values().contains(&vec![0, 1, 2, 3]));
     }
 }
