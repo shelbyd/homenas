@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use super::*;
@@ -13,14 +15,16 @@ struct ChunkMeta {
     counts: HashMap<String, u64>,
 }
 
-impl<O: ObjectStore> ChunkStore<O> {
+impl<O> ChunkStore<O> {
     pub fn new(backing: O, meta_key: &str) -> Self {
         Self {
             backing,
             meta_key: meta_key.to_string(),
         }
     }
+}
 
+impl<O: ObjectStore> ChunkStore<O> {
     pub async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
         self.backing.get(&self.storage_key(id)).await
     }

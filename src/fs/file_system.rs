@@ -2,17 +2,21 @@ use dashmap::{mapref::entry::Entry as DashMapEntry, DashMap};
 use std::{ffi::OsStr, io::BufRead, sync::Arc};
 
 use super::*;
-use crate::object_store::{self, CborTyped, *};
+use crate::object_store::{self, *};
 
 pub struct FileSystem<O> {
     store: Arc<O>,
+    #[allow(dead_code)]
+    chunk_store: Arc<ChunkStore<Arc<O>>>,
     open_handles: DashMap<NodeId, FileHandle<Arc<O>>>,
 }
 
 impl<O> FileSystem<O> {
     pub fn new(store: O) -> Self {
+        let arc = Arc::new(store);
         Self {
-            store: Arc::new(store),
+            store: Arc::clone(&arc),
+            chunk_store: Arc::new(ChunkStore::new(Arc::clone(&arc), "meta/chunks")),
             open_handles: Default::default(),
         }
     }
@@ -24,10 +28,6 @@ enum Contents {
 }
 
 impl<O: ObjectStore> FileSystem<O> {
-    fn typed_store(&self) -> CborTyped<&Arc<O>> {
-        CborTyped::new(&self.store)
-    }
-
     pub async fn lookup(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
         let parent = self.read_entry(parent).await?;
 
@@ -47,7 +47,7 @@ impl<O: ObjectStore> FileSystem<O> {
         log::debug!("read_entry(node): {:?}", node);
 
         match self
-            .typed_store()
+            .store
             .get_typed::<Entry>(&format!("file/{}.meta", node))
             .await
             .into_found()?
@@ -59,7 +59,7 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     async fn write_entry(&self, entry: &Entry) -> IoResult<()> {
-        self.typed_store()
+        self.store
             .set_typed(&format!("file/{}.meta", entry.node_id), &entry)
             .await
     }

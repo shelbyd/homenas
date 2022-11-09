@@ -1,42 +1,35 @@
 use serde::{de::DeserializeOwned, Serialize};
-use std::ops::Deref;
 
 use super::*;
 
-pub struct CborTyped<O> {
-    backing: O,
-}
-
-impl<O> CborTyped<O> {
-    pub fn new(backing: O) -> Self {
-        Self { backing }
-    }
-}
-
-impl<O> Deref for CborTyped<O> {
-    type Target = O;
-
-    fn deref(&self) -> &Self::Target {
-        &self.backing
-    }
-}
-
-impl<O> CborTyped<O>
-where
-    O: ObjectStore,
-{
-    pub async fn set_typed<T>(&self, key: &str, t: &T) -> IoResult<()>
+#[async_trait::async_trait]
+pub trait CborTypedExt {
+    async fn set_typed<T>(&self, key: &str, t: &T) -> IoResult<()>
     where
-        T: Serialize,
+        T: Serialize + Sync;
+
+    async fn get_typed<T>(&self, key: &str) -> IoResult<T>
+    where
+        T: DeserializeOwned;
+}
+
+#[async_trait::async_trait]
+impl<O> CborTypedExt for O
+where
+    O: ObjectStore + Sized,
+{
+    async fn set_typed<T>(&self, key: &str, t: &T) -> IoResult<()>
+    where
+        T: Serialize + Sync,
     {
-        self.backing.set(key, &ser(t)?).await
+        self.set(key, &ser(t)?).await
     }
 
-    pub async fn get_typed<T>(&self, key: &str) -> IoResult<T>
+    async fn get_typed<T>(&self, key: &str) -> IoResult<T>
     where
         T: DeserializeOwned,
     {
-        de(&self.backing.get(key).await?)
+        de(&self.get(key).await?)
     }
 }
 
