@@ -17,6 +17,17 @@ impl Memory {
     pub fn entries(&self) -> HashMap<String, Vec<u8>> {
         self.inner.read().unwrap().clone()
     }
+
+    #[cfg(test)]
+    pub fn values(&self) -> Vec<Vec<u8>> {
+        self.inner
+            .read()
+            .unwrap()
+            .values()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]

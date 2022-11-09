@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ffi::OsString, time::Duration};
 
+mod chunk_store;
+use chunk_store::*;
+
 mod file_handle;
 use file_handle::*;
 
