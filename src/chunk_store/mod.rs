@@ -5,6 +5,9 @@ use crate::{io::*, object_store::*};
 mod ref_count;
 pub use ref_count::*;
 
+mod striping;
+pub use striping::*;
+
 #[cfg(test)]
 // TODO(shelbyd): Remove.
 pub fn chunk_storage_key(id: &str) -> String {
@@ -25,7 +28,11 @@ pub trait ChunkStore: Send + Sync {
     type Backing: ObjectStore;
 
     async fn read(&self, id: &str) -> IoResult<Vec<u8>>;
+
+    // TODO(shelbyd): Provide id alongside chunk.
     async fn store(&self, chunk: &[u8]) -> IoResult<String>;
+    async fn store_at(&self, chunk: &[u8], location: &Location) -> IoResult<String>;
+
     async fn drop(&self, id: &str) -> IoResult<()>;
 
     fn object(&self) -> &Self::Backing;
@@ -45,6 +52,9 @@ where
     async fn store(&self, chunk: &[u8]) -> IoResult<String> {
         (**self).store(chunk).await
     }
+    async fn store_at(&self, chunk: &[u8], location: &Location) -> IoResult<String> {
+        (**self).store_at(chunk, location).await
+    }
     async fn drop(&self, id: &str) -> IoResult<()> {
         (**self).drop(id).await
     }
@@ -53,6 +63,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct Direct<O> {
     // TODO(shelbyd): Not pub.
     pub backing: O,
@@ -85,11 +96,23 @@ where
     type Backing = O;
 
     async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
-        self.backing.get(&self.storage_key(id)).await
+        log::debug!("{}: Reading", &id[..6]);
+        let ok = self.backing.get(&self.storage_key(id)).await?;
+        log::debug!("{}: Found", &id[..6]);
+        Ok(ok)
     }
     async fn store(&self, chunk: &[u8]) -> IoResult<String> {
         let id = id_for(chunk);
         self.backing.set(&self.storage_key(&id), chunk).await?;
+        Ok(id)
+    }
+    async fn store_at(&self, chunk: &[u8], location: &Location) -> IoResult<String> {
+        let id = id_for(chunk);
+        self.backing
+            .connect(location)
+            .await?
+            .set(&self.storage_key(&id), chunk)
+            .await?;
         Ok(id)
     }
     async fn drop(&self, id: &str) -> IoResult<()> {

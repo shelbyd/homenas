@@ -185,6 +185,16 @@ where
 
         Ok(true)
     }
+
+    async fn locations(&self) -> IoResult<Vec<Location>> {
+        log::error!("TODO(shelbyd): Implement Network::locations");
+        Err(IoError::Unimplemented)
+    }
+
+    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
+        log::error!("TODO(shelbyd): Implement Network::connect");
+        Err(IoError::Unimplemented)
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]

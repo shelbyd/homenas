@@ -1,16 +1,17 @@
-use std::{collections::HashMap, sync::RwLock};
+use std::{collections::BTreeMap, sync::RwLock};
 
 use super::*;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Memory {
-    inner: RwLock<HashMap<String, Vec<u8>>>,
+    map: RwLock<BTreeMap<String, Vec<u8>>>,
+    id: u64,
 }
 
 #[async_trait::async_trait]
 impl ObjectStore for Memory {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
-        self.inner
+        self.map
             .write()
             .unwrap()
             .insert(key.to_string(), value.to_vec());
@@ -18,16 +19,20 @@ impl ObjectStore for Memory {
     }
 
     async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
-        self.inner
+        self.map
             .read()
             .unwrap()
             .get(key)
+            .map(|k| {
+                log::debug!("{}: Served from memory({})", key, self.id);
+                k
+            })
             .cloned()
             .ok_or(IoError::NotFound)
     }
 
     async fn clear(&self, key: &str) -> IoResult<()> {
-        self.inner.write().unwrap().remove(key);
+        self.map.write().unwrap().remove(key);
         Ok(())
     }
 
@@ -37,7 +42,7 @@ impl ObjectStore for Memory {
         current: Option<&[u8]>,
         new: &[u8],
     ) -> IoResult<bool> {
-        let mut write = self.inner.write().unwrap();
+        let mut write = self.map.write().unwrap();
         let actual_current = write.get(key);
         if actual_current.map(Vec::as_slice) != current {
             return Ok(false);
@@ -46,20 +51,41 @@ impl ObjectStore for Memory {
         write.insert(key.to_string(), new.to_vec());
         Ok(true)
     }
+
+    async fn locations(&self) -> IoResult<Vec<Location>> {
+        Ok(vec![Location::Memory(self.id)])
+    }
+
+    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
+        if *location != Location::Memory(self.id) {
+            return Err(IoError::NotFound);
+        }
+
+        Ok(Box::new(self))
+    }
+}
+
+impl Default for Memory {
+    fn default() -> Memory {
+        Memory {
+            map: Default::default(),
+            id: rand::random(),
+        }
+    }
 }
 
 #[cfg(test)]
 impl Memory {
     pub fn len(&self) -> usize {
-        self.inner.read().unwrap().len()
+        self.map.read().unwrap().len()
     }
 
-    pub fn entries(&self) -> HashMap<String, Vec<u8>> {
-        self.inner.read().unwrap().clone()
+    pub fn entries(&self) -> BTreeMap<String, Vec<u8>> {
+        self.map.read().unwrap().clone()
     }
 
     pub fn values(&self) -> Vec<Vec<u8>> {
-        self.inner
+        self.map
             .read()
             .unwrap()
             .values()
@@ -68,7 +94,17 @@ impl Memory {
             .collect()
     }
 
+    pub fn keys(&self) -> Vec<String> {
+        self.map
+            .read()
+            .unwrap()
+            .keys()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     pub fn clear_all(&self) {
-        self.inner.write().unwrap().clear()
+        self.map.write().unwrap().clear()
     }
 }

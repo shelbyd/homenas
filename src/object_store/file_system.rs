@@ -97,6 +97,16 @@ impl ObjectStore for FileSystem {
         file.write_all(&new).await?;
         Ok(true)
     }
+
+    async fn locations(&self) -> IoResult<Vec<Location>> {
+        log::warn!("TODO(shelbyd): Implement Memory::locations");
+        Err(IoError::Unimplemented)
+    }
+
+    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
+        eprintln!("TODO(shelbyd): Implement FileSystem::connect");
+        Err(IoError::Unimplemented)
+    }
 }
 
 #[cfg(test)]

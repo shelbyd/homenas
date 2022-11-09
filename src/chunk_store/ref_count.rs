@@ -76,6 +76,10 @@ where
         Ok(id)
     }
 
+    async fn store_at(&self, chunk: &[u8], location: &Location) -> IoResult<String> {
+        self.backing.store_at(chunk, location).await
+    }
+
     async fn drop(&self, id: &str) -> IoResult<()> {
         let ref_count = self
             .update_meta(&id, |meta| {

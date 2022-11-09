@@ -40,3 +40,4 @@ features = [
 [dev-dependencies]
 lazy_static = "1.4.0"
 tempfile = "3.3.0"
+test-log = "0.2.11"

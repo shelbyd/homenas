@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+use serde::{Deserialize, Serialize};
 
 pub mod file_system;
 pub use file_system::*;
@@ -30,6 +30,9 @@ pub trait ObjectStore: Send + Sync {
         current: Option<&[u8]>,
         new: &[u8],
     ) -> IoResult<bool>;
+
+    async fn locations(&self) -> IoResult<Vec<Location>>;
+    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>>;
 }
 
 /// Update the value at the provided key. May retry until successful.
@@ -49,25 +52,9 @@ where
     }
 }
 
-pub struct StorageOptions {
-    replication: Replication,
-    location: Option<Location>,
-}
-
-pub enum Replication {
-    Saturate,
-    None {
-        banned_machines: Vec<MachineId>,
-        banned_disks: Vec<DiskId>,
-    },
-}
-
-pub struct MachineId(u64);
-pub struct DiskId(u64);
-
-pub struct Location {
-    machine: MachineId,
-    disk: DiskId,
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
+pub enum Location {
+    Memory(u64),
 }
 
 pub trait ResultExt<T> {
@@ -107,5 +94,12 @@ where
         new: &[u8],
     ) -> IoResult<bool> {
         (**self).compare_exchange(key, current, new).await
+    }
+
+    async fn locations(&self) -> IoResult<Vec<Location>> {
+        (**self).locations().await
+    }
+    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
+        (**self).connect(location).await
     }
 }
