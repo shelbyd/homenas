@@ -19,6 +19,7 @@ impl FileSystem {
         let path = path.as_ref();
 
         let id_path = path.join("directory-id");
+        std::fs::create_dir_all(id_path.parent().unwrap())?;
         let id = match std::fs::read(&id_path) {
             Ok(bytes) => serde_cbor::from_slice(&bytes)?,
             Err(e) if e.kind() == ErrorKind::NotFound => {

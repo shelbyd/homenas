@@ -215,7 +215,7 @@ impl StripesMeta {
 }
 
 fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
-    assert_eq!(a.len(), b.len());
+    assert!(a.len() >= b.len());
 
     a.iter().zip(b).map(|(a, b)| a ^ b).collect()
 }
@@ -324,7 +324,19 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn non_full_write_at_end_of_file() {
+        let mem = memory_chunk_store();
+        let store = Striping::new(&mem, "meta");
+
+        store.store(&[0, 1, 2, 3]).await.unwrap();
+        let id = store.store(&[4, 5, 6]).await.unwrap();
+
+        assert_eq!(mem.read(&id).await, Ok(vec![4, 5, 6]));
+    }
+
     // Robust against partial failures.
     // Unstriped will stripe when another is available.
     // Distributes parity chunks.
+    // Dropping chunks.
 }
