@@ -24,21 +24,24 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
-        let backing_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
+        let object_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
             [] => Box::new(Memory::default()),
-            [single] => Box::new(FileSystem::new(single)),
-            [dirs @ ..] => Box::new(Multi::new(dirs.iter().map(FileSystem::new))),
+            [single] => Box::new(FileSystem::new(single)?),
+            [dirs @ ..] => Box::new(Multi::new(
+                dirs.iter()
+                    .map(FileSystem::new)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
         };
 
-        let network_store = Network::new(backing_store, self.listen_on, &self.peers).await?;
-        let object_store = Arc::new(network_store);
+        let object_store = Network::new(object_store, self.listen_on, &self.peers).await?;
+        let object_store = Arc::new(object_store);
 
-        let chunk_store = Arc::new(RefCount::new(
-            Direct::new(Arc::clone(&object_store), "chunks"),
-            "meta/chunks",
-        ));
+        let chunk_store = Direct::new(Arc::clone(&object_store), "chunks");
+        let chunk_store = Striping::new(chunk_store, "meta/chunks");
+        let chunk_store = RefCount::new(chunk_store, "meta/chunks");
 
-        let fs = crate::fs::FileSystem::new(object_store, chunk_store);
+        let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
 
         crate::fuse::mount(fs, &self.mount_path)?;
         Ok(())

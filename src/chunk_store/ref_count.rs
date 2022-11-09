@@ -119,7 +119,7 @@ mod tests {
         let mem = memory_chunk_store();
         let store = RefCount::new(&mem, "meta");
 
-        assert_eq!(store.read("foo").await, Err(IoError::NotFound));
+        assert_eq!(store.read("foobarbaz").await, Err(IoError::NotFound));
     }
 
     #[tokio::test]

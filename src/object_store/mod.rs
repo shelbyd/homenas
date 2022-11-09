@@ -55,6 +55,7 @@ where
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 pub enum Location {
     Memory(u64),
+    Directory(u64),
 }
 
 pub trait ResultExt<T> {

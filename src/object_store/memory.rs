@@ -80,10 +80,6 @@ impl Memory {
         self.map.read().unwrap().len()
     }
 
-    pub fn entries(&self) -> BTreeMap<String, Vec<u8>> {
-        self.map.read().unwrap().clone()
-    }
-
     pub fn values(&self) -> Vec<Vec<u8>> {
         self.map
             .read()

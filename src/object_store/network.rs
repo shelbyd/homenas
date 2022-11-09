@@ -1,4 +1,5 @@
 use dashmap::{mapref::entry::Entry, DashMap};
+use futures::future::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{
@@ -7,7 +8,6 @@ use tokio::{
 };
 
 use super::*;
-use response::*;
 
 pub struct Network<O, P = NetworkPeer> {
     backing: O,
@@ -101,7 +101,11 @@ where
         match req {
             Request::Fetch(k) => {
                 let found = self.backing.get(&k).await?;
-                Ok(Box::new(Fetch(found)))
+                Ok(Box::new(response::Fetch(found)))
+            }
+            Request::Locations => {
+                let locations = self.backing.locations().await?;
+                Ok(Box::new(response::Locations(locations)))
             }
         }
     }
@@ -123,7 +127,7 @@ where
     P: Peer,
 {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
-        let (_sends, set) = futures::future::join(
+        let (_sends, set) = join(
             self.broadcast(Event::Set(key.to_string(), value.to_vec())),
             self.backing.set(key, value),
         )
@@ -139,10 +143,10 @@ where
         }
 
         if self.peers.len() > 0 {
-            let found = futures::future::select_ok(
+            let found = select_ok(
                 self.peers
                     .iter()
-                    .map(|p| p.request::<Fetch>(Request::Fetch(key.to_string()))),
+                    .map(|p| p.request::<response::Fetch>(Request::Fetch(key.to_string()))),
             )
             .await;
 
@@ -155,7 +159,7 @@ where
     }
 
     async fn clear(&self, key: &str) -> IoResult<()> {
-        let (_sends, clear) = futures::future::join(
+        let (_sends, clear) = join(
             self.broadcast(Event::Clear(key.to_string())),
             self.backing.clear(key),
         )
@@ -187,13 +191,25 @@ where
     }
 
     async fn locations(&self) -> IoResult<Vec<Location>> {
-        log::error!("TODO(shelbyd): Implement Network::locations");
-        Err(IoError::Unimplemented)
+        let from_peers = try_join_all(
+            self.peers
+                .iter()
+                .map(|p| p.request::<response::Locations>(Request::Locations)),
+        );
+        let from_backing = self.backing.locations();
+
+        let (peers, backing) = try_join(from_peers, from_backing).await?;
+        Ok(peers
+            .into_iter()
+            .map(|resp| resp.0)
+            .flat_map(|peer| peer)
+            .chain(backing)
+            .collect())
     }
 
     async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        log::error!("TODO(shelbyd): Implement Network::connect");
-        Err(IoError::Unimplemented)
+        log::warn!("TODO(shelbyd): Implement Network::connect");
+        self.backing.connect(location).await
     }
 }
 
@@ -213,6 +229,7 @@ pub enum Event {
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Request {
     Fetch(String),
+    Locations,
 }
 
 mod response {
@@ -220,6 +237,9 @@ mod response {
 
     #[derive(Serialize, Deserialize, Debug)]
     pub struct Fetch(pub Vec<u8>);
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct Locations(pub Vec<Location>);
 }
 
 // TODO(shelbyd): Can make private?
@@ -424,7 +444,7 @@ mod tests {
         peer.respond(|m| match m {
             Request::Fetch(key) => {
                 assert_eq!(&key, "foo");
-                Some(TestPeer::ser(Fetch(b"bar".to_vec())))
+                Some(TestPeer::ser(response::Fetch(b"bar".to_vec())))
             }
 
             #[allow(unreachable_patterns)]
@@ -465,7 +485,7 @@ mod tests {
             net.request(Request::Fetch("foo".to_string()))
                 .await
                 .map(|ser| cbor_ser(&ser)),
-            Ok(serde_cbor::to_vec(&Fetch(b"bar".to_vec())).unwrap())
+            Ok(serde_cbor::to_vec(&response::Fetch(b"bar".to_vec())).unwrap())
         );
     }
 }

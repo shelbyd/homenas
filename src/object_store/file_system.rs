@@ -11,14 +11,28 @@ use super::*;
 
 pub struct FileSystem {
     path: PathBuf,
-    // paths: Vec<PathBuf>,
+    id: u64,
 }
 
 impl FileSystem {
-    pub fn new(path: impl AsRef<Path>) -> Self {
-        FileSystem {
-            path: path.as_ref().to_path_buf(),
-        }
+    pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+
+        let id_path = path.join("directory-id");
+        let id = match std::fs::read(&id_path) {
+            Ok(bytes) => serde_cbor::from_slice(&bytes)?,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                let id = rand::random();
+                std::fs::write(&id_path, &serde_cbor::to_vec(&id)?)?;
+                id
+            }
+            Err(e) => return Err(anyhow::anyhow!(e)),
+        };
+
+        Ok(FileSystem {
+            path: path.to_path_buf(),
+            id,
+        })
     }
 
     async fn writable_path(&self, key: &str) -> IoResult<PathBuf> {
@@ -99,13 +113,15 @@ impl ObjectStore for FileSystem {
     }
 
     async fn locations(&self) -> IoResult<Vec<Location>> {
-        log::warn!("TODO(shelbyd): Implement Memory::locations");
-        Err(IoError::Unimplemented)
+        Ok(vec![Location::Directory(self.id)])
     }
 
     async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        eprintln!("TODO(shelbyd): Implement FileSystem::connect");
-        Err(IoError::Unimplemented)
+        if *location != Location::Directory(self.id) {
+            return Err(IoError::NotFound);
+        }
+
+        Ok(Box::new(self))
     }
 }
 
@@ -121,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn empty() {
         let dir = tempdir().unwrap();
-        let fs = FileSystem::new(dir.path());
+        let fs = FileSystem::new(dir.path()).unwrap();
 
         assert_eq!(fs.get("foo").await, Err(IoError::NotFound));
     }
@@ -129,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn set_has_get() {
         let dir = tempdir().unwrap();
-        let fs = FileSystem::new(dir.path());
+        let fs = FileSystem::new(dir.path()).unwrap();
 
         fs.set("foo", b"bar").await.unwrap();
 
@@ -139,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn set_with_slashes() {
         let dir = tempdir().unwrap();
-        let fs = FileSystem::new(dir.path());
+        let fs = FileSystem::new(dir.path()).unwrap();
 
         fs.set("foo/bar/baz", b"bar").await.unwrap();
 
@@ -153,7 +169,7 @@ mod tests {
         #[tokio::test]
         async fn no_value() {
             let dir = tempdir().unwrap();
-            let fs = FileSystem::new(dir.path());
+            let fs = FileSystem::new(dir.path()).unwrap();
 
             assert_eq!(fs.compare_exchange("foo", None, b"bar").await, Ok(true));
             assert_eq!(fs.get("foo").await, Ok(bar()));
@@ -162,7 +178,7 @@ mod tests {
         #[tokio::test]
         async fn existing_value_with_none() {
             let dir = tempdir().unwrap();
-            let fs = FileSystem::new(dir.path());
+            let fs = FileSystem::new(dir.path()).unwrap();
 
             fs.set("foo", b"bar").await.unwrap();
 
@@ -173,7 +189,7 @@ mod tests {
         #[tokio::test]
         async fn no_value_with_some() {
             let dir = tempdir().unwrap();
-            let fs = FileSystem::new(dir.path());
+            let fs = FileSystem::new(dir.path()).unwrap();
 
             assert_eq!(
                 fs.compare_exchange("foo", Some(b"bar"), b"bar").await,
@@ -185,7 +201,7 @@ mod tests {
         #[tokio::test]
         async fn incorrect_value() {
             let dir = tempdir().unwrap();
-            let fs = FileSystem::new(dir.path());
+            let fs = FileSystem::new(dir.path()).unwrap();
 
             fs.set("foo", b"bar").await.unwrap();
 
@@ -199,7 +215,7 @@ mod tests {
         #[tokio::test]
         async fn correct_some() {
             let dir = tempdir().unwrap();
-            let fs = FileSystem::new(dir.path());
+            let fs = FileSystem::new(dir.path()).unwrap();
 
             fs.set("foo", b"bar").await.unwrap();
 
