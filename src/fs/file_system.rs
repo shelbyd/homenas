@@ -209,7 +209,7 @@ impl<O: ObjectStore> FileSystem<O> {
 
     async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<Arc<O>>> {
         FileHandle::create(
-            Arc::clone(&self.store),
+            Arc::clone(&self.chunk_store),
             1024 * 1024,
             &format!("file/{}.chunks", node),
         )

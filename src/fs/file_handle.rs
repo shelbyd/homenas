@@ -1,6 +1,4 @@
-#![allow(dead_code)]
-
-use std::io::BufRead;
+use std::{io::BufRead, sync::Arc};
 
 use super::*;
 use crate::object_store::*;
@@ -12,7 +10,7 @@ struct ChunkIds {
 }
 
 pub struct FileHandle<O> {
-    store: O,
+    store: Arc<ChunkStore<O>>,
     chunk_size: u32,
     chunks: BTreeMap<u64, Chunk>,
     meta_key: String,
@@ -34,7 +32,11 @@ struct ChunkRef {
 }
 
 impl<O: ObjectStore> FileHandle<O> {
-    pub async fn create(store: O, chunk_size: u32, meta_key: &str) -> IoResult<Self> {
+    pub async fn create(
+        store: Arc<ChunkStore<O>>,
+        chunk_size: u32,
+        meta_key: &str,
+    ) -> IoResult<Self> {
         let ids = store
             .get_typed::<ChunkIds>(meta_key)
             .await
@@ -63,9 +65,13 @@ impl<O: ObjectStore> FileHandle<O> {
         })
     }
 
-    pub fn chunk_key(&self, index: usize) -> Option<String> {
+    #[cfg(test)]
+    fn chunk_key(&self, index: usize) -> Option<String> {
         let chunk = self.chunks.iter().nth(index)?.1;
-        Some(chunk.storage_key())
+        match chunk {
+            Chunk::Ref(r) => Some(chunk_storage_key(&r.id)),
+            Chunk::InMemory(_, _) => unreachable!(),
+        }
     }
 
     pub async fn read(&self, offset: u64, amount: u32) -> IoResult<Vec<u8>> {
@@ -82,7 +88,7 @@ impl<O: ObjectStore> FileHandle<O> {
                 None => return Ok(ret),
 
                 Some(Chunk::InMemory(v, _)) => Cow::Borrowed(v),
-                Some(c @ Chunk::Ref(_)) => Cow::Owned(self.store.get(&c.storage_key()).await?),
+                Some(Chunk::Ref(ref_)) => Cow::Owned(self.store.read(&ref_.id).await?),
             };
 
             if buf_start > buf.len() {
@@ -141,13 +147,13 @@ impl<O: ObjectStore> FileHandle<O> {
             .chunks
             .entry(offset)
             .or_insert(Chunk::InMemory(Vec::new(), None));
-        entry.load(&self.store).await
+        entry.load(&*self.store).await
     }
 
     async fn flush_full_chunks(&mut self) -> IoResult<()> {
         for chunk in self.chunks.values_mut() {
             if chunk.size() == self.chunk_size {
-                chunk.flush(&self.store).await?;
+                chunk.flush(&*self.store).await?;
             }
         }
 
@@ -158,8 +164,8 @@ impl<O: ObjectStore> FileHandle<O> {
         let mut chunk_ids = ChunkIds::new(self.chunk_size);
 
         for (offset, chunk) in &mut self.chunks {
-            chunk.flush(&self.store).await?;
-            chunk_ids.chunks.insert(*offset, chunk.ref_());
+            let ref_ = chunk.flush(&*self.store).await?;
+            chunk_ids.chunks.insert(*offset, ref_);
         }
 
         self.store
@@ -173,7 +179,7 @@ impl<O: ObjectStore> FileHandle<O> {
 
     pub async fn forget(self) -> IoResult<()> {
         for chunk in self.chunks.into_values() {
-            chunk.forget(&self.store).await?;
+            chunk.forget(&*self.store).await?;
         }
 
         self.store.clear(&self.meta_key).await?;
@@ -182,25 +188,6 @@ impl<O: ObjectStore> FileHandle<O> {
 }
 
 impl Chunk {
-    fn id(&self) -> String {
-        match self {
-            Chunk::Ref(r) => r.id.clone(),
-            Chunk::InMemory(v, _) => Self::id_of(v),
-        }
-    }
-
-    fn storage_key(&self) -> String {
-        Self::build_storage_key(&self.id())
-    }
-
-    fn build_storage_key(id: &str) -> String {
-        format!("chunks/{}/{}", &id[..4], &id[4..])
-    }
-
-    fn id_of(data: &[u8]) -> String {
-        hex::encode(blake3::hash(data).as_bytes())
-    }
-
     fn size(&self) -> u32 {
         match self {
             Chunk::InMemory(v, _) => v.len() as u32,
@@ -208,50 +195,42 @@ impl Chunk {
         }
     }
 
-    async fn flush(&mut self, store: &impl ObjectStore) -> IoResult<()> {
+    async fn flush(&mut self, chunk_store: &ChunkStore<impl ObjectStore>) -> IoResult<ChunkRef> {
         match self {
-            Chunk::Ref(_) => {}
-            Chunk::InMemory(v, Some(prev)) if *prev == Self::id_of(v) => {}
-
+            Chunk::Ref(r) => Ok(r.clone()),
             Chunk::InMemory(buf, previous_id) => {
-                let id = Self::id_of(buf);
-                log::info!("{}: Flushing chunk", id);
-                store.set(&Self::build_storage_key(&id), &buf).await?;
+                let id = chunk_store.store(&buf).await?;
 
                 if let Some(prev) = previous_id {
-                    store.clear(&Self::build_storage_key(&prev)).await?;
+                    chunk_store.drop(&prev).await?;
                 }
 
-                *self = Chunk::Ref(ChunkRef {
+                let ref_ = ChunkRef {
                     id,
                     size: buf.len() as u32,
-                });
+                };
+                *self = Chunk::Ref(ref_.clone());
+                Ok(ref_)
             }
         }
-
-        Ok(())
     }
 
-    fn ref_(&self) -> ChunkRef {
-        ChunkRef {
-            id: self.id(),
-            size: self.size(),
+    async fn forget(self, store: &ChunkStore<impl ObjectStore>) -> IoResult<()> {
+        match self {
+            Chunk::Ref(ref_) => store.drop(&ref_.id).await?,
+            Chunk::InMemory(_, Some(id)) => store.drop(&id).await?,
+            Chunk::InMemory(_, None) => {}
         }
-    }
 
-    async fn forget(self, store: &impl ObjectStore) -> IoResult<()> {
-        store.clear(&self.storage_key()).await?;
         Ok(())
     }
 
-    async fn load(&mut self, store: &impl ObjectStore) -> IoResult<&mut Vec<u8>> {
+    async fn load(&mut self, store: &ChunkStore<impl ObjectStore>) -> IoResult<&mut Vec<u8>> {
         match self {
             Chunk::InMemory(buf, _) => Ok(buf),
             Chunk::Ref(ref_) => {
-                let id = ref_.id.clone();
-
-                let read = store.get(&self.storage_key()).await?;
-                *self = Chunk::InMemory(read, Some(id));
+                let read = store.read(&ref_.id).await?;
+                *self = Chunk::InMemory(read, Some(ref_.id.clone()));
 
                 match self {
                     Chunk::InMemory(buf, _) => Ok(buf),
@@ -287,7 +266,13 @@ mod tests {
     const ONE_MB: u32 = 1024 * 1024; // 1 MiB
 
     async fn create<O: ObjectStore>(o: &O, size: u32) -> FileHandle<&O> {
-        FileHandle::create(o, size, "meta").await.unwrap()
+        FileHandle::create(
+            Arc::new(ChunkStore::new(o, "meta/chunks")),
+            size,
+            "files/test.meta",
+        )
+        .await
+        .unwrap()
     }
 
     #[test]
@@ -296,15 +281,6 @@ mod tests {
             chunk_range(ONE_MB, 4, u32::MAX as u64),
             (0, 4 as usize, ONE_MB as usize)
         );
-    }
-
-    #[test]
-    fn chunk_splits_to_subdirs() {
-        let chunk = Chunk::Ref(ChunkRef {
-            id: String::from("deadbeef"),
-            size: 42,
-        });
-        assert_eq!(&chunk.storage_key(), "chunks/dead/beef");
     }
 
     #[tokio::test]
@@ -444,7 +420,7 @@ mod tests {
         fh.flush().await.unwrap();
 
         assert_eq!(fh.forget().await, Ok(()));
-        assert_eq!(mem.len(), 0);
+        assert!(!mem.values().contains(&b"foo".to_vec()));
     }
 
     #[tokio::test]
@@ -459,6 +435,7 @@ mod tests {
         fh.flush().await.unwrap();
 
         assert_eq!(fh.forget().await, Ok(()));
-        assert_eq!(mem.len(), 0);
+        assert!(!mem.values().contains(&b"foo".to_vec()));
+        assert!(!mem.values().contains(&b"bar".to_vec()));
     }
 }

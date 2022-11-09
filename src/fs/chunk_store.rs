@@ -15,6 +15,15 @@ struct ChunkMeta {
     counts: HashMap<String, u64>,
 }
 
+pub fn chunk_storage_key(id: &str) -> String {
+    let location = if id.len() >= 4 {
+        format!("{}/{}", &id[..4], &id[4..])
+    } else {
+        id.to_string()
+    };
+    format!("chunks/{}", location)
+}
+
 impl<O> ChunkStore<O> {
     pub fn new(backing: O, meta_key: &str) -> Self {
         Self {
@@ -26,21 +35,14 @@ impl<O> ChunkStore<O> {
 
 impl<O: ObjectStore> ChunkStore<O> {
     pub async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
-        self.backing.get(&self.storage_key(id)).await
-    }
-
-    fn storage_key(&self, id: &str) -> String {
-        let location = if id.len() >= 4 {
-            format!("{}/{}", &id[..4], &id[4..])
-        } else {
-            id.to_string()
-        };
-        format!("chunks/{}", location)
+        self.backing.get(&chunk_storage_key(id)).await
     }
 
     pub async fn store(&self, chunk: &[u8]) -> IoResult<String> {
         let id = hex::encode(blake3::hash(chunk).as_bytes());
-        self.backing.set(&self.storage_key(&id), chunk).await?;
+        log::info!("{}: Flushing chunk", id);
+
+        self.backing.set(&chunk_storage_key(&id), chunk).await?;
 
         self.update_meta(&id, |meta| {
             *meta.counts.entry(id.to_string()).or_default() += 1;
@@ -81,10 +83,18 @@ impl<O: ObjectStore> ChunkStore<O> {
             .await?;
 
         if ref_count == 0 {
-            self.backing.clear(&self.storage_key(id)).await?;
+            self.backing.clear(&chunk_storage_key(id)).await?;
         }
 
         Ok(())
+    }
+}
+
+impl<O> std::ops::Deref for ChunkStore<O> {
+    type Target = O;
+
+    fn deref(&self) -> &Self::Target {
+        &self.backing
     }
 }
 
