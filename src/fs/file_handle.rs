@@ -9,8 +9,8 @@ struct ChunkIds {
     chunks: BTreeMap<u64, ChunkRef>,
 }
 
-pub struct FileHandle<O> {
-    store: Arc<RefCount<O>>,
+pub struct FileHandle<C> {
+    store: Arc<C>,
     chunk_size: u32,
     chunks: BTreeMap<u64, Chunk>,
     meta_key: String,
@@ -31,13 +31,10 @@ struct ChunkRef {
     size: u32,
 }
 
-impl<O: ObjectStore> FileHandle<O> {
-    pub async fn create(
-        store: Arc<RefCount<O>>,
-        chunk_size: u32,
-        meta_key: &str,
-    ) -> IoResult<Self> {
+impl<C: ChunkStore> FileHandle<C> {
+    pub async fn create(store: Arc<C>, chunk_size: u32, meta_key: &str) -> IoResult<Self> {
         let ids = store
+            .object()
             .get_typed::<ChunkIds>(meta_key)
             .await
             .into_found()?
@@ -147,7 +144,7 @@ impl<O: ObjectStore> FileHandle<O> {
             .chunks
             .entry(offset)
             .or_insert(Chunk::InMemory(Vec::new(), None));
-        entry.load(&*self.store).await
+        entry.load(&self.store).await
     }
 
     async fn flush_full_chunks(&mut self) -> IoResult<()> {
@@ -169,6 +166,7 @@ impl<O: ObjectStore> FileHandle<O> {
         }
 
         self.store
+            .object()
             .set_typed::<ChunkIds>(&self.meta_key, &chunk_ids)
             .await
     }
@@ -182,7 +180,7 @@ impl<O: ObjectStore> FileHandle<O> {
             chunk.forget(&*self.store).await?;
         }
 
-        self.store.clear(&self.meta_key).await?;
+        self.store.object().clear(&self.meta_key).await?;
         Ok(())
     }
 }
@@ -195,7 +193,7 @@ impl Chunk {
         }
     }
 
-    async fn flush(&mut self, chunk_store: &RefCount<impl ObjectStore>) -> IoResult<ChunkRef> {
+    async fn flush(&mut self, chunk_store: &impl ChunkStore) -> IoResult<ChunkRef> {
         match self {
             Chunk::Ref(r) => Ok(r.clone()),
             Chunk::InMemory(buf, previous_id) => {
@@ -215,7 +213,7 @@ impl Chunk {
         }
     }
 
-    async fn forget(self, store: &RefCount<impl ObjectStore>) -> IoResult<()> {
+    async fn forget(self, store: &impl ChunkStore) -> IoResult<()> {
         match self {
             Chunk::Ref(ref_) => store.drop(&ref_.id).await?,
             Chunk::InMemory(_, Some(id)) => store.drop(&id).await?,
@@ -225,7 +223,7 @@ impl Chunk {
         Ok(())
     }
 
-    async fn load(&mut self, store: &RefCount<impl ObjectStore>) -> IoResult<&mut Vec<u8>> {
+    async fn load(&mut self, store: &impl ChunkStore) -> IoResult<&mut Vec<u8>> {
         match self {
             Chunk::InMemory(buf, _) => Ok(buf),
             Chunk::Ref(ref_) => {
@@ -265,14 +263,10 @@ mod tests {
 
     const ONE_MB: u32 = 1024 * 1024; // 1 MiB
 
-    async fn create<O: ObjectStore>(o: &O, size: u32) -> FileHandle<&O> {
-        FileHandle::create(
-            Arc::new(RefCount::new(o, "meta/chunks")),
-            size,
-            "files/test.meta",
-        )
-        .await
-        .unwrap()
+    async fn create<C: ChunkStore>(c: &C, size: u32) -> FileHandle<&C> {
+        FileHandle::create(Arc::new(c), size, "files/test.meta")
+            .await
+            .unwrap()
     }
 
     #[test]
@@ -285,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn created_file_has_no_contents() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let fh = create(&mem, ONE_MB).await;
 
         assert_eq!(fh.read(0, 4096).await, Ok(Vec::new()));
@@ -293,7 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn after_write_has_written() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, ONE_MB).await;
 
         assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
@@ -303,7 +297,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_with_offset() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, ONE_MB).await;
 
         fh.write(3, 3, &[1, 2, 3][..]).await.unwrap();
@@ -313,7 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_chunk_prefix() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, ONE_MB).await;
 
         fh.write(3, 3, &[3, 4, 5][..]).await.unwrap();
@@ -324,21 +318,21 @@ mod tests {
 
     #[tokio::test]
     async fn write_full_chunk_flushes() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, 4).await;
 
         fh.write(0, 4, &[1, 2, 3, 4][..]).await.unwrap();
 
         assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4]));
         assert_eq!(
-            mem.get(&fh.chunk_key(0).unwrap()).await,
+            mem.backing.get(&fh.chunk_key(0).unwrap()).await,
             Ok(vec![1, 2, 3, 4])
         );
     }
 
     #[tokio::test]
     async fn multipart_write_flushes_chunk() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, 4).await;
 
         fh.write(0, 2, &[1, 2][..]).await.unwrap();
@@ -346,14 +340,14 @@ mod tests {
 
         assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4]));
         assert_eq!(
-            mem.get(&fh.chunk_key(0).unwrap()).await,
+            mem.backing.get(&fh.chunk_key(0).unwrap()).await,
             Ok(vec![1, 2, 3, 4])
         );
     }
 
     #[tokio::test]
     async fn multipart_write_past_chunk() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, 4).await;
 
         fh.write(0, 2, &[1, 2][..]).await.unwrap();
@@ -361,14 +355,14 @@ mod tests {
 
         assert_eq!(fh.read(0, 4096).await, Ok(vec![1, 2, 3, 4, 5, 6]));
         assert_eq!(
-            mem.get(&fh.chunk_key(0).unwrap()).await,
+            mem.backing.get(&fh.chunk_key(0).unwrap()).await,
             Ok(vec![1, 2, 3, 4])
         );
     }
 
     #[tokio::test]
     async fn three_chunks_of_writes() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, 4).await;
 
         let zero_to_twelve = (0..12).collect::<Vec<_>>();
@@ -376,22 +370,22 @@ mod tests {
 
         assert_eq!(fh.read(0, 4096).await, Ok(zero_to_twelve));
         assert_eq!(
-            mem.get(&fh.chunk_key(0).unwrap()).await,
+            mem.backing.get(&fh.chunk_key(0).unwrap()).await,
             Ok(vec![0, 1, 2, 3])
         );
         assert_eq!(
-            mem.get(&fh.chunk_key(1).unwrap()).await,
+            mem.backing.get(&fh.chunk_key(1).unwrap()).await,
             Ok(vec![4, 5, 6, 7])
         );
         assert_eq!(
-            mem.get(&fh.chunk_key(2).unwrap()).await,
+            mem.backing.get(&fh.chunk_key(2).unwrap()).await,
             Ok(vec![8, 9, 10, 11])
         );
     }
 
     #[tokio::test]
     async fn another_instance_has_written() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, 4).await;
 
         fh.write(0, 4, &[0, 1, 2, 3][..]).await.unwrap();
@@ -403,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_starts_past_data() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, ONE_MB).await;
 
         assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
@@ -413,19 +407,19 @@ mod tests {
 
     #[tokio::test]
     async fn forget_clears_store() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, ONE_MB).await;
 
         fh.write(0, 3, &b"foo"[..]).await.unwrap();
         fh.flush().await.unwrap();
 
         assert_eq!(fh.forget().await, Ok(()));
-        assert!(!mem.values().contains(&b"foo".to_vec()));
+        assert!(!mem.backing.values().contains(&b"foo".to_vec()));
     }
 
     #[tokio::test]
     async fn forget_after_change_is_empty() {
-        let mem = Memory::default();
+        let mem = memory_chunk_store();
         let mut fh = create(&mem, ONE_MB).await;
 
         fh.write(0, 3, &b"foo"[..]).await.unwrap();
@@ -435,7 +429,7 @@ mod tests {
         fh.flush().await.unwrap();
 
         assert_eq!(fh.forget().await, Ok(()));
-        assert!(!mem.values().contains(&b"foo".to_vec()));
-        assert!(!mem.values().contains(&b"bar".to_vec()));
+        assert!(!mem.backing.values().contains(&b"foo".to_vec()));
+        assert!(!mem.backing.values().contains(&b"bar".to_vec()));
     }
 }

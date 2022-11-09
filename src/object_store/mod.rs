@@ -85,57 +85,11 @@ impl<T> ResultExt<T> for Result<T, IoError> {
 }
 
 #[async_trait::async_trait]
-impl<'o, O> ObjectStore for &'o O
+impl<P> ObjectStore for P
 where
-    O: ObjectStore,
+    P: std::ops::Deref + Send + Sync,
+    P::Target: ObjectStore,
 {
-    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
-        (**self).set(key, value).await
-    }
-    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
-        (**self).get(key).await
-    }
-    async fn clear(&self, key: &str) -> IoResult<()> {
-        (**self).clear(key).await
-    }
-
-    async fn compare_exchange(
-        &self,
-        key: &str,
-        current: Option<&[u8]>,
-        new: &[u8],
-    ) -> IoResult<bool> {
-        (**self).compare_exchange(key, current, new).await
-    }
-}
-
-#[async_trait::async_trait]
-impl<O> ObjectStore for std::sync::Arc<O>
-where
-    O: ObjectStore,
-{
-    async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
-        (**self).set(key, value).await
-    }
-    async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
-        (**self).get(key).await
-    }
-    async fn clear(&self, key: &str) -> IoResult<()> {
-        (**self).clear(key).await
-    }
-
-    async fn compare_exchange(
-        &self,
-        key: &str,
-        current: Option<&[u8]>,
-        new: &[u8],
-    ) -> IoResult<bool> {
-        (**self).compare_exchange(key, current, new).await
-    }
-}
-
-#[async_trait::async_trait]
-impl ObjectStore for Box<dyn ObjectStore> {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()> {
         (**self).set(key, value).await
     }

@@ -7,8 +7,8 @@ use crate::object_store::{self, *};
 pub struct FileSystem<O> {
     store: Arc<O>,
     #[allow(dead_code)]
-    chunk_store: Arc<RefCount<Arc<O>>>,
-    open_handles: DashMap<NodeId, FileHandle<Arc<O>>>,
+    chunk_store: Arc<RefCount<Direct<Arc<O>>>>,
+    open_handles: DashMap<NodeId, FileHandle<RefCount<Direct<Arc<O>>>>>,
 }
 
 impl<O> FileSystem<O> {
@@ -16,7 +16,10 @@ impl<O> FileSystem<O> {
         let arc = Arc::new(store);
         Self {
             store: Arc::clone(&arc),
-            chunk_store: Arc::new(RefCount::new(Arc::clone(&arc), "meta/chunks")),
+            chunk_store: Arc::new(RefCount::new(
+                Direct::new(Arc::clone(&arc), "chunks"),
+                "meta/chunks",
+            )),
             open_handles: Default::default(),
         }
     }
@@ -207,13 +210,11 @@ impl<O: ObjectStore> FileSystem<O> {
         }
     }
 
-    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<Arc<O>>> {
-        FileHandle::create(
-            Arc::clone(&self.chunk_store),
-            1024 * 1024,
-            &format!("file/{}.chunks", node),
-        )
-        .await
+    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<RefCount<Direct<Arc<O>>>>> {
+        let chunk_store: Arc<RefCount<Direct<Arc<O>>>> = Arc::clone(&self.chunk_store);
+        let handle: FileHandle<RefCount<Direct<Arc<O>>>> =
+            FileHandle::create(chunk_store, 1024 * 1024, &format!("file/{}.chunks", node)).await?;
+        Ok(handle)
     }
 
     pub async fn write<B: BufRead>(
