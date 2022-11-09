@@ -15,7 +15,7 @@ pub use network::*;
 pub mod typed;
 pub use typed::*;
 
-use crate::fs::{IoError, IoResult};
+use crate::io::*;
 
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {

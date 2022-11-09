@@ -6,8 +6,6 @@ use tokio::{
     sync::oneshot::{channel, Sender},
 };
 
-use crate::fs::{IoError, IoResult};
-
 use super::*;
 use response::*;
 

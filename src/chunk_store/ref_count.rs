@@ -1,11 +1,10 @@
-#![allow(dead_code)]
-
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::*;
 use crate::object_store::*;
 
-pub struct ChunkStore<O> {
+pub struct RefCount<O> {
     backing: O,
     meta_key: String,
 }
@@ -24,7 +23,7 @@ pub fn chunk_storage_key(id: &str) -> String {
     format!("chunks/{}", location)
 }
 
-impl<O> ChunkStore<O> {
+impl<O> RefCount<O> {
     pub fn new(backing: O, meta_key: &str) -> Self {
         Self {
             backing,
@@ -33,12 +32,33 @@ impl<O> ChunkStore<O> {
     }
 }
 
-impl<O: ObjectStore> ChunkStore<O> {
-    pub async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
+impl<O: ObjectStore> RefCount<O> {
+    async fn update_meta<R: Send>(
+        &self,
+        _id: &str,
+        mut f: impl FnMut(&mut ChunkMeta) -> R + Send,
+    ) -> IoResult<R> {
+        update_typed(&self.backing, &self.meta_key, |meta: Option<ChunkMeta>| {
+            let mut meta = meta.unwrap_or_default();
+
+            let r = f(&mut meta);
+
+            Ok((meta, r))
+        })
+        .await
+    }
+}
+
+#[async_trait::async_trait]
+impl<O> ChunkStore for RefCount<O>
+where
+    O: ObjectStore,
+{
+    async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
         self.backing.get(&chunk_storage_key(id)).await
     }
 
-    pub async fn store(&self, chunk: &[u8]) -> IoResult<String> {
+    async fn store(&self, chunk: &[u8]) -> IoResult<String> {
         let id = hex::encode(blake3::hash(chunk).as_bytes());
 
         let ref_count = self
@@ -60,22 +80,7 @@ impl<O: ObjectStore> ChunkStore<O> {
         Ok(id)
     }
 
-    async fn update_meta<R: Send>(
-        &self,
-        _id: &str,
-        mut f: impl FnMut(&mut ChunkMeta) -> R + Send,
-    ) -> IoResult<R> {
-        update_typed(&self.backing, &self.meta_key, |meta: Option<ChunkMeta>| {
-            let mut meta = meta.unwrap_or_default();
-
-            let r = f(&mut meta);
-
-            Ok((meta, r))
-        })
-        .await
-    }
-
-    pub async fn drop(&self, id: &str) -> IoResult<()> {
+    async fn drop(&self, id: &str) -> IoResult<()> {
         let ref_count = self
             .update_meta(&id, |meta| {
                 let entry = meta.counts.entry(id.to_string()).or_default();
@@ -101,7 +106,7 @@ impl<O: ObjectStore> ChunkStore<O> {
     }
 }
 
-impl<O> std::ops::Deref for ChunkStore<O> {
+impl<O> std::ops::Deref for RefCount<O> {
     type Target = O;
 
     fn deref(&self) -> &Self::Target {
@@ -116,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn empty_store() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         assert_eq!(store.read("foo").await, Err(IoError::NotFound));
     }
@@ -124,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn store_allows_read() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
 
@@ -134,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn store_to_new_creates() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
         let after_one = mem.len();
@@ -146,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn store_to_existing_does_not_create() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
         let after_one = mem.len();
@@ -158,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn drop_removes_from_backing() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.drop(&id).await.unwrap();
@@ -169,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn separate_stores_and_single_drop_keeps() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         let second_id = store.store(&[0, 1, 2, 3]).await.unwrap();
@@ -183,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn double_store_does_not_set() {
         let mem = Memory::default();
-        let store = ChunkStore::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta");
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         mem.clear(&chunk_storage_key(&id)).await.unwrap();

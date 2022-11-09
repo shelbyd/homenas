@@ -2,7 +2,8 @@ use polyfuse::{reply, Data, KernelConfig, Operation, Session};
 use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::{
-    fs::{Entry, EntryKind, FileSystem, IoError},
+    fs::{Entry, EntryKind, FileSystem},
+    io::*,
     object_store::ObjectStore,
 };
 

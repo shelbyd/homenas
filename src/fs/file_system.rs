@@ -7,7 +7,7 @@ use crate::object_store::{self, *};
 pub struct FileSystem<O> {
     store: Arc<O>,
     #[allow(dead_code)]
-    chunk_store: Arc<ChunkStore<Arc<O>>>,
+    chunk_store: Arc<RefCount<Arc<O>>>,
     open_handles: DashMap<NodeId, FileHandle<Arc<O>>>,
 }
 
@@ -16,7 +16,7 @@ impl<O> FileSystem<O> {
         let arc = Arc::new(store);
         Self {
             store: Arc::clone(&arc),
-            chunk_store: Arc::new(ChunkStore::new(Arc::clone(&arc), "meta/chunks")),
+            chunk_store: Arc::new(RefCount::new(Arc::clone(&arc), "meta/chunks")),
             open_handles: Default::default(),
         }
     }

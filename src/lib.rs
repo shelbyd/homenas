@@ -1,8 +1,10 @@
 use structopt::*;
 
+mod chunk_store;
 mod commands;
 mod fs;
 mod fuse;
+mod io;
 mod object_store;
 
 #[derive(StructOpt, Debug)]

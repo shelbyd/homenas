@@ -10,7 +10,7 @@ struct ChunkIds {
 }
 
 pub struct FileHandle<O> {
-    store: Arc<ChunkStore<O>>,
+    store: Arc<RefCount<O>>,
     chunk_size: u32,
     chunks: BTreeMap<u64, Chunk>,
     meta_key: String,
@@ -33,7 +33,7 @@ struct ChunkRef {
 
 impl<O: ObjectStore> FileHandle<O> {
     pub async fn create(
-        store: Arc<ChunkStore<O>>,
+        store: Arc<RefCount<O>>,
         chunk_size: u32,
         meta_key: &str,
     ) -> IoResult<Self> {
@@ -195,7 +195,7 @@ impl Chunk {
         }
     }
 
-    async fn flush(&mut self, chunk_store: &ChunkStore<impl ObjectStore>) -> IoResult<ChunkRef> {
+    async fn flush(&mut self, chunk_store: &RefCount<impl ObjectStore>) -> IoResult<ChunkRef> {
         match self {
             Chunk::Ref(r) => Ok(r.clone()),
             Chunk::InMemory(buf, previous_id) => {
@@ -215,7 +215,7 @@ impl Chunk {
         }
     }
 
-    async fn forget(self, store: &ChunkStore<impl ObjectStore>) -> IoResult<()> {
+    async fn forget(self, store: &RefCount<impl ObjectStore>) -> IoResult<()> {
         match self {
             Chunk::Ref(ref_) => store.drop(&ref_.id).await?,
             Chunk::InMemory(_, Some(id)) => store.drop(&id).await?,
@@ -225,7 +225,7 @@ impl Chunk {
         Ok(())
     }
 
-    async fn load(&mut self, store: &ChunkStore<impl ObjectStore>) -> IoResult<&mut Vec<u8>> {
+    async fn load(&mut self, store: &RefCount<impl ObjectStore>) -> IoResult<&mut Vec<u8>> {
         match self {
             Chunk::InMemory(buf, _) => Ok(buf),
             Chunk::Ref(ref_) => {
@@ -267,7 +267,7 @@ mod tests {
 
     async fn create<O: ObjectStore>(o: &O, size: u32) -> FileHandle<&O> {
         FileHandle::create(
-            Arc::new(ChunkStore::new(o, "meta/chunks")),
+            Arc::new(RefCount::new(o, "meta/chunks")),
             size,
             "files/test.meta",
         )
