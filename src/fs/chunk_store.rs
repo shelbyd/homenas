@@ -26,7 +26,12 @@ impl<O: ObjectStore> ChunkStore<O> {
     }
 
     fn storage_key(&self, id: &str) -> String {
-        format!("chunks/{}", id)
+        let location = if id.len() >= 4 {
+            format!("{}/{}", &id[..4], &id[4..])
+        } else {
+            id.to_string()
+        };
+        format!("chunks/{}", location)
     }
 
     pub async fn store(&self, chunk: &[u8]) -> IoResult<String> {
@@ -43,20 +48,16 @@ impl<O: ObjectStore> ChunkStore<O> {
 
     async fn update_meta<R: Send>(
         &self,
-        id: &str,
+        _id: &str,
         mut f: impl FnMut(&mut ChunkMeta) -> R + Send,
     ) -> IoResult<R> {
-        update_typed(
-            &self.backing,
-            &self.meta_key,
-            |mut meta: Option<ChunkMeta>| {
-                let mut meta = meta.unwrap_or_default();
+        update_typed(&self.backing, &self.meta_key, |meta: Option<ChunkMeta>| {
+            let mut meta = meta.unwrap_or_default();
 
-                let r = f(&mut meta);
+            let r = f(&mut meta);
 
-                Ok((meta, r))
-            },
-        )
+            Ok((meta, r))
+        })
         .await
     }
 
