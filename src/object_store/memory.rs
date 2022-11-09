@@ -75,6 +75,7 @@ impl Default for Memory {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 impl Memory {
     pub fn len(&self) -> usize {
         self.map.read().unwrap().len()
