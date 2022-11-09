@@ -56,8 +56,6 @@ async fn process_operation<'r, O>(
 where
     O: ObjectStore + 'static,
 {
-    log::debug!("received operation: {:?}", op);
-
     match op {
         Operation::Lookup(op) => {
             let entry = fs.lookup(op.parent(), op.name()).await?;

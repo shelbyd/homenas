@@ -43,7 +43,7 @@ impl ObjectStore for FileSystem {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 log::debug!("key not found: {}", key);
                 Err(IoError::NotFound)
-            },
+            }
             Err(e) => Err(e.into()),
         }
     }

@@ -54,7 +54,7 @@ impl<O: ObjectStore> FileSystem<O> {
         {
             Some(e) => Ok(e),
             None if node == 1 => return Ok(root_entry()),
-            None => unreachable!("parent has broken link to child"),
+            None => Err(IoError::NotFound),
         }
     }
 
@@ -62,6 +62,10 @@ impl<O: ObjectStore> FileSystem<O> {
         self.typed_store()
             .set_typed(&format!("file/{}.meta", entry.node_id), &entry)
             .await
+    }
+
+    async fn clear_entry(&self, node: NodeId) -> IoResult<()> {
+        self.store.clear(&format!("file/{}.meta", node)).await
     }
 
     pub async fn update_entry<R: Send>(
@@ -118,6 +122,11 @@ impl<O: ObjectStore> FileSystem<O> {
         name: &OsStr,
         entry: impl FnOnce(NodeId) -> Entry,
     ) -> IoResult<Entry> {
+        log::debug!(
+            "add_entry_to_parent(parent, name): {:?}",
+            (parent, name.to_str())
+        );
+
         let new_node_id = self.get_next_node_id().await?;
         let entry = entry(new_node_id);
 
@@ -173,8 +182,17 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     pub async fn forget(&self, node: NodeId) -> IoResult<()> {
-        let handle = self.create_handle(node).await?;
-        handle.forget().await?;
+        let entry = self.read_entry(node).await?;
+        self.clear_entry(node).await?;
+
+        match entry.kind {
+            EntryKind::File(_) => {
+                let handle = self.create_handle(node).await?;
+                handle.forget().await?;
+            }
+            EntryKind::Directory(_) => {}
+        }
+
         Ok(())
     }
 
@@ -372,12 +390,35 @@ mod tests {
     #[tokio::test]
     async fn unlink_deletes_file() {
         let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let fs = FileSystem::new(&mem_os);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.unlink(1, &OsStr::new("foo.txt")).await.unwrap();
 
         let entries = fs.list_children(1).await.unwrap();
         assert!(!entries.contains(&created));
+
+        assert_eq!(
+            mem_os.get(&format!("files/{}.meta", created.node_id)).await,
+            Err(IoError::NotFound)
+        );
+    }
+
+    #[tokio::test]
+    async fn rmdir_deletes_dir() {
+        let mem_os = crate::object_store::Memory::default();
+        let fs = FileSystem::new(&mem_os);
+
+        let created = fs.create_dir(1, &OsStr::new("foo")).await.unwrap();
+        fs.unlink(1, &OsStr::new("foo")).await.unwrap();
+        fs.forget(created.node_id).await.unwrap();
+
+        let entries = fs.list_children(1).await.unwrap();
+        assert!(!entries.contains(&created));
+
+        assert_eq!(
+            mem_os.get(&format!("files/{}.meta", created.node_id)).await,
+            Err(IoError::NotFound)
+        );
     }
 }

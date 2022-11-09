@@ -12,6 +12,11 @@ impl Memory {
     pub fn len(&self) -> usize {
         self.inner.read().unwrap().len()
     }
+
+    #[cfg(test)]
+    pub fn entries(&self) -> HashMap<String, Vec<u8>> {
+        self.inner.read().unwrap().clone()
+    }
 }
 
 #[async_trait::async_trait]
