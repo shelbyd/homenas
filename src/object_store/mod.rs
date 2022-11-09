@@ -6,6 +6,9 @@ pub use file_system::*;
 pub mod memory;
 pub use memory::*;
 
+pub mod multi;
+pub use multi::*;
+
 pub mod network;
 pub use network::*;
 

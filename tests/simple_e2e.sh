@@ -8,7 +8,11 @@ cargo test
 set +e
 
 DIR="/tmp/homenas_a"
-./target/debug/homenas start $DIR &
+./target/debug/homenas start $DIR \
+  --backing-dir /tmp/.homenas-store/main \
+  --backing-dir /tmp/.homenas-store/backup \
+  &
+
 sleep 0.5
 
 tree -s -h $DIR
@@ -27,8 +31,8 @@ rm $HELLO
 tree -s -h $DIR
 
 mkdir -p "$DIR/foo/bar/baz"
-tree -s -h $DIR
 echo $TEXT > "$DIR/foo/bar/baz/hello.txt"
+tree -s -h $DIR
 
 rm -r "$DIR/foo"
 tree -s -h $DIR

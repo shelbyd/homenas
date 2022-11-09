@@ -40,7 +40,10 @@ impl ObjectStore for FileSystem {
     async fn get(&self, key: &str) -> IoResult<Vec<u8>> {
         match fs::read(self.path.join(key)).await {
             Ok(buf) => Ok(buf),
-            Err(e) if e.kind() == ErrorKind::NotFound => Err(IoError::NotFound),
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                log::debug!("key not found: {}", key);
+                Err(IoError::NotFound)
+            },
             Err(e) => Err(e.into()),
         }
     }
