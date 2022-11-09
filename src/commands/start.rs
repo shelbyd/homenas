@@ -1,7 +1,7 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use structopt::*;
 
-use crate::object_store::*;
+use crate::{chunk_store::*, object_store::*};
 
 #[derive(StructOpt, Debug)]
 #[allow(dead_code)] // TODO: Remove.
@@ -31,8 +31,14 @@ impl StartCommand {
         };
 
         let network_store = Network::new(backing_store, self.listen_on, &self.peers).await?;
+        let object_store = Arc::new(network_store);
 
-        let fs = crate::fs::FileSystem::new(network_store);
+        let chunk_store = Arc::new(RefCount::new(
+            Direct::new(Arc::clone(&object_store), "chunks"),
+            "meta/chunks",
+        ));
+
+        let fs = crate::fs::FileSystem::new(object_store, chunk_store);
 
         crate::fuse::mount(fs, &self.mount_path)?;
         Ok(())

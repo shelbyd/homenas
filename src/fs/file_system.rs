@@ -1,25 +1,20 @@
 use dashmap::{mapref::entry::Entry as DashMapEntry, DashMap};
-use std::{ffi::OsStr, io::BufRead, sync::Arc};
+use std::{ffi::OsStr, io::BufRead};
 
 use super::*;
 use crate::object_store::{self, *};
 
-pub struct FileSystem<O> {
-    store: Arc<O>,
-    #[allow(dead_code)]
-    chunk_store: Arc<RefCount<Direct<Arc<O>>>>,
-    open_handles: DashMap<NodeId, FileHandle<RefCount<Direct<Arc<O>>>>>,
+pub struct FileSystem<O, C> {
+    object_store: O,
+    chunk_store: C,
+    open_handles: DashMap<NodeId, FileHandle<C>>,
 }
 
-impl<O> FileSystem<O> {
-    pub fn new(store: O) -> Self {
-        let arc = Arc::new(store);
+impl<O, C> FileSystem<O, C> {
+    pub fn new(object_store: O, chunk_store: C) -> Self {
         Self {
-            store: Arc::clone(&arc),
-            chunk_store: Arc::new(RefCount::new(
-                Direct::new(Arc::clone(&arc), "chunks"),
-                "meta/chunks",
-            )),
+            object_store,
+            chunk_store,
             open_handles: Default::default(),
         }
     }
@@ -30,7 +25,7 @@ enum Contents {
     Raw(Vec<u8>),
 }
 
-impl<O: ObjectStore> FileSystem<O> {
+impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
     pub async fn lookup(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
         let parent = self.read_entry(parent).await?;
 
@@ -50,7 +45,7 @@ impl<O: ObjectStore> FileSystem<O> {
         log::debug!("read_entry(node): {:?}", node);
 
         match self
-            .store
+            .object_store
             .get_typed::<Entry>(&format!("file/{}.meta", node))
             .await
             .into_found()?
@@ -62,13 +57,15 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     async fn write_entry(&self, entry: &Entry) -> IoResult<()> {
-        self.store
+        self.object_store
             .set_typed(&format!("file/{}.meta", entry.node_id), &entry)
             .await
     }
 
     async fn clear_entry(&self, node: NodeId) -> IoResult<()> {
-        self.store.clear(&format!("file/{}.meta", node)).await
+        self.object_store
+            .clear(&format!("file/{}.meta", node))
+            .await
     }
 
     pub async fn update_entry<R: Send>(
@@ -76,17 +73,21 @@ impl<O: ObjectStore> FileSystem<O> {
         node: NodeId,
         mut update: impl FnMut(&mut Entry) -> IoResult<R> + Send,
     ) -> IoResult<(Entry, R)> {
-        update_typed(&self.store, &format!("file/{}.meta", node), |entry| {
-            let mut entry = match entry {
-                Some(e) => e,
-                None if node == 1 => root_entry(),
-                None => return Err(IoError::NotFound),
-            };
+        update_typed(
+            &self.object_store,
+            &format!("file/{}.meta", node),
+            |entry| {
+                let mut entry = match entry {
+                    Some(e) => e,
+                    None if node == 1 => root_entry(),
+                    None => return Err(IoError::NotFound),
+                };
 
-            let r = update(&mut entry)?;
+                let r = update(&mut entry)?;
 
-            Ok((entry.clone(), (entry, r)))
-        })
+                Ok((entry.clone(), (entry, r)))
+            },
+        )
         .await
     }
 
@@ -150,7 +151,7 @@ impl<O: ObjectStore> FileSystem<O> {
     }
 
     async fn get_next_node_id(&self) -> IoResult<NodeId> {
-        object_store::update_typed(&*self.store, "meta/next_node_id", |next| {
+        object_store::update_typed(&self.object_store, "meta/next_node_id", |next| {
             let next = next.unwrap_or(2);
             Ok((next + 1, next))
         })
@@ -210,10 +211,13 @@ impl<O: ObjectStore> FileSystem<O> {
         }
     }
 
-    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<RefCount<Direct<Arc<O>>>>> {
-        let chunk_store: Arc<RefCount<Direct<Arc<O>>>> = Arc::clone(&self.chunk_store);
-        let handle: FileHandle<RefCount<Direct<Arc<O>>>> =
-            FileHandle::create(chunk_store, 1024 * 1024, &format!("file/{}.chunks", node)).await?;
+    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<C>> {
+        let handle = FileHandle::create(
+            self.chunk_store.clone(),
+            1024 * 1024,
+            &format!("file/{}.chunks", node),
+        )
+        .await?;
         Ok(handle)
     }
 
@@ -279,8 +283,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_root() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         assert_eq!(
             fs.lookup(1, &OsStr::new("foo.txt")).await,
@@ -310,8 +314,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_child() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
 
@@ -324,8 +328,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_child_does_not_have_random_children() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
 
@@ -337,8 +341,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_children_after_create() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
 
@@ -348,8 +352,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_read() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
@@ -360,8 +364,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_past_end() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
@@ -376,8 +380,8 @@ mod tests {
 
     #[tokio::test]
     async fn write_read_includes_size() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
@@ -390,8 +394,8 @@ mod tests {
 
     #[tokio::test]
     async fn unlink_deletes_file() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(&mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.unlink(1, &OsStr::new("foo.txt")).await.unwrap();
@@ -400,15 +404,17 @@ mod tests {
         assert!(!entries.contains(&created));
 
         assert_eq!(
-            mem_os.get(&format!("files/{}.meta", created.node_id)).await,
+            mem.backing
+                .get(&format!("files/{}.meta", created.node_id))
+                .await,
             Err(IoError::NotFound)
         );
     }
 
     #[tokio::test]
     async fn rmdir_deletes_dir() {
-        let mem_os = crate::object_store::Memory::default();
-        let fs = FileSystem::new(&mem_os);
+        let mem = memory_chunk_store();
+        let fs = FileSystem::new(&mem.backing, &mem);
 
         let created = fs.create_dir(1, &OsStr::new("foo")).await.unwrap();
         fs.unlink(1, &OsStr::new("foo")).await.unwrap();
@@ -418,7 +424,9 @@ mod tests {
         assert!(!entries.contains(&created));
 
         assert_eq!(
-            mem_os.get(&format!("files/{}.meta", created.node_id)).await,
+            mem.backing
+                .get(&format!("files/{}.meta", created.node_id))
+                .await,
             Err(IoError::NotFound)
         );
     }

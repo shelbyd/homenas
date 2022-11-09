@@ -1,4 +1,4 @@
-use std::{io::BufRead, sync::Arc};
+use std::io::BufRead;
 
 use super::*;
 use crate::object_store::*;
@@ -10,7 +10,7 @@ struct ChunkIds {
 }
 
 pub struct FileHandle<C> {
-    store: Arc<C>,
+    store: C,
     chunk_size: u32,
     chunks: BTreeMap<u64, Chunk>,
     meta_key: String,
@@ -32,7 +32,7 @@ struct ChunkRef {
 }
 
 impl<C: ChunkStore> FileHandle<C> {
-    pub async fn create(store: Arc<C>, chunk_size: u32, meta_key: &str) -> IoResult<Self> {
+    pub async fn create(store: C, chunk_size: u32, meta_key: &str) -> IoResult<Self> {
         let ids = store
             .object()
             .get_typed::<ChunkIds>(meta_key)
@@ -150,7 +150,7 @@ impl<C: ChunkStore> FileHandle<C> {
     async fn flush_full_chunks(&mut self) -> IoResult<()> {
         for chunk in self.chunks.values_mut() {
             if chunk.size() == self.chunk_size {
-                chunk.flush(&*self.store).await?;
+                chunk.flush(&self.store).await?;
             }
         }
 
@@ -161,7 +161,7 @@ impl<C: ChunkStore> FileHandle<C> {
         let mut chunk_ids = ChunkIds::new(self.chunk_size);
 
         for (offset, chunk) in &mut self.chunks {
-            let ref_ = chunk.flush(&*self.store).await?;
+            let ref_ = chunk.flush(&self.store).await?;
             chunk_ids.chunks.insert(*offset, ref_);
         }
 
@@ -177,7 +177,7 @@ impl<C: ChunkStore> FileHandle<C> {
 
     pub async fn forget(self) -> IoResult<()> {
         for chunk in self.chunks.into_values() {
-            chunk.forget(&*self.store).await?;
+            chunk.forget(&self.store).await?;
         }
 
         self.store.object().clear(&self.meta_key).await?;
@@ -264,7 +264,7 @@ mod tests {
     const ONE_MB: u32 = 1024 * 1024; // 1 MiB
 
     async fn create<C: ChunkStore>(c: &C, size: u32) -> FileHandle<&C> {
-        FileHandle::create(Arc::new(c), size, "files/test.meta")
+        FileHandle::create(c, size, "files/test.meta")
             .await
             .unwrap()
     }
