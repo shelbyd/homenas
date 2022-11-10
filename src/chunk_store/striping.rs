@@ -118,7 +118,12 @@ impl<C: ChunkStore> ChunkStore for Striping<C> {
     }
 
     async fn drop(&self, id: &str) -> IoResult<()> {
-        self.backing.drop(id).await
+        let chunk = self.backing.read(id).await?;
+        self.update_meta(id, |stripes| stripes.drop(id, &chunk))
+            .await??;
+        self.backing.drop(id).await?;
+
+        Ok(())
     }
 }
 
@@ -218,6 +223,28 @@ impl StripesMeta {
         Err(IoError::NotFound)
     }
 
+    fn stripe_mut(&mut self, id: &str) -> IoResult<&mut Stripe> {
+        let stripes = [
+            self.chunk_stripe.get(id).map(|stripe_id| {
+                self.completed
+                    .get_mut(stripe_id)
+                    .expect("broken link to stripe")
+            }),
+            Some(&mut self.unstriped),
+            Some(&mut self.in_progress),
+        ];
+
+        for stripe in stripes {
+            if let Some(stripe) = stripe {
+                if stripe.chunks.contains(id) {
+                    return Ok(stripe);
+                }
+            }
+        }
+
+        Err(IoError::NotFound)
+    }
+
     fn take_stripe(mut self, id: &str) -> IoResult<Stripe> {
         let stripes = [
             self.chunk_stripe.remove(id).map(|stripe_id| {
@@ -239,6 +266,17 @@ impl StripesMeta {
 
         Err(IoError::NotFound)
     }
+
+    fn drop(&mut self, id: &str, chunk: &[u8]) -> IoResult<()> {
+        self.stripe_mut(id)?.drop(id, chunk);
+
+        // Not tested. Please add a test that requires this remove.
+        if let None = self.chunk_stripe.remove(id) {
+            log::warn!("StripesMeta does not have chunk {}", id);
+        }
+
+        Ok(())
+    }
 }
 
 impl Stripe {
@@ -259,13 +297,24 @@ impl Stripe {
         }
         result
     }
+
+    fn drop(&mut self, id: &str, chunk: &[u8]) {
+        assert!(self.chunks.remove(id), "stripe dropped missing id");
+        self.parity = xor(&self.parity, &chunk);
+    }
 }
 
 fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
-    assert!(a.len() >= b.len());
+    let total = core::cmp::max(a.len(), b.len());
+
+    let extended_a = a.iter().chain(std::iter::repeat(&0));
     let extended_b = b.iter().chain(std::iter::repeat(&0));
 
-    a.iter().zip(extended_b).map(|(a, b)| a ^ b).collect()
+    extended_a
+        .zip(extended_b)
+        .take(total)
+        .map(|(a, b)| a ^ b)
+        .collect()
 }
 
 #[cfg(test)]
@@ -278,6 +327,7 @@ mod tests {
         assert_eq!(xor(&[0b01010101], &[0b10101010]), vec![0b11111111]);
         assert_eq!(xor(&[0xff], &[0xff]), vec![0x00]);
         assert_eq!(xor(&[0xff, 0xff], &[0xff]), vec![0x00, 0xff]);
+        assert_eq!(xor(&[0xff], &[0xff, 0xff]), vec![0x00, 0xff]);
     }
 
     #[tokio::test]
@@ -316,6 +366,25 @@ mod tests {
             Striping::new(&mem, "meta").read(&first).await,
             Ok(vec![0, 1, 2, 3])
         );
+    }
+
+    #[tokio::test]
+    async fn dropping_two_allows_recovering_another() {
+        let backing_1 = Memory::default();
+        let backing_2 = Memory::default();
+        let backing_3 = Memory::default();
+        let backing = Multi::new([&backing_1, &backing_2, &backing_3]);
+        let direct = Direct::new(&backing, "chunks");
+
+        let store = Striping::new(&direct, "meta");
+
+        let first = store.store(&[1]).await.unwrap();
+        let second = store.store(&[2]).await.unwrap();
+
+        store.drop(&first).await.unwrap();
+        direct.drop(&second).await.unwrap();
+
+        assert_eq!(store.read(&second).await, Ok(vec![2]));
     }
 
     #[cfg(test)]
@@ -483,17 +552,11 @@ mod tests {
                 let foo = &[0, 1, 2, 3];
                 let bar = &[4, 5, 6, 7];
 
-                dbg!(&stripes);
                 stripes.set("foo", foo, locations.clone());
-                dbg!(&stripes);
                 stripes.set("bar", bar, locations.clone());
-                dbg!(&stripes);
 
                 let parity = xor(foo, bar);
                 let parity_id = id_for(&parity);
-
-                dbg!(&parity);
-                dbg!(&stripes);
 
                 assert_eq!(
                     stripes.clone().recover(
@@ -507,10 +570,42 @@ mod tests {
                 );
             }
         }
+
+        #[cfg(test)]
+        mod dropping {
+            use super::*;
+
+            #[test]
+            fn striped_allows_recover() {
+                let mut stripes = StripesMeta::default();
+
+                let locations = nonempty![Memory(42), Memory(43), Memory(44)];
+
+                let foo = &[0, 1, 2, 3];
+                let bar = &[4, 5, 6, 7];
+
+                stripes.set("foo", foo, locations.clone());
+                stripes.set("bar", bar, locations.clone());
+
+                assert_eq!(stripes.drop("foo", &[0, 1, 2, 3][..]), Ok(()));
+            }
+
+            #[test]
+            fn unstriped_allows_recover() {
+                let mut stripes = StripesMeta::default();
+
+                let locations = nonempty![Memory(42)];
+
+                stripes.set("foo", &[0, 1, 2, 3], locations.clone());
+                stripes.set("bar", &[4, 5, 6, 7], locations.clone());
+                stripes.drop("foo", &[0, 1, 2, 3][..]).unwrap();
+
+                assert_eq!(stripes.recover("bar", empty_map()), Ok(vec![4, 5, 6, 7]));
+            }
+        }
     }
 
     // Robust against partial failures.
     // Unstriped will stripe when another is available.
-    // Distributes parity chunks.
-    // Dropping chunks.
+    // Cleaning up stripes that are only parity.
 }
