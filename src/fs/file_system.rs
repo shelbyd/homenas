@@ -228,6 +228,7 @@ impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
         amount: u32,
         data: B,
     ) -> IoResult<u32> {
+        // Experiment showed negligible to 0 contention here with large file writes.
         self.open_handles
             .get_mut(&node)
             .ok_or(IoError::BadDescriptor)?
