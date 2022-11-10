@@ -1,10 +1,9 @@
 #![allow(dead_code)]
 
 use futures::future::*;
-use maplit::*;
 use nonempty::*;
 use serde::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -25,6 +24,9 @@ struct StripesMeta {
     completed: HashMap<StripeId, Stripe>,
 
     chunk_stripe: HashMap<ChunkId, StripeId>,
+
+    /// How many parity chunks the location has.
+    parity_counts: HashMap<Location, u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -100,13 +102,13 @@ impl<C: ChunkStore> ChunkStore for Striping<C> {
         let locations = self.object().locations().await?;
         let locations = NonEmpty::from_vec(locations).ok_or(IoError::Io)?;
 
-        let (store_at, flush_chunks) = self
+        let (store_at, parity_chunk) = self
             .update_meta(&id, |stripes| stripes.set(&id, chunk, locations.clone()))
             .await?;
 
         self.store_at(chunk, &store_at).await?;
 
-        for (location, data) in flush_chunks {
+        if let Some((location, data)) = parity_chunk {
             self.store_at(&data, &location).await?;
         }
 
@@ -133,7 +135,7 @@ impl StripesMeta {
         id: &str,
         chunk: &[u8],
         locations: NonEmpty<Location>,
-    ) -> (Location, HashMap<Location, Vec<u8>>) {
+    ) -> (Location, Option<(Location, Vec<u8>)>) {
         // TODO(shelbyd): Use stripes_mut.
         let update_parity = |p: &mut Vec<u8>| {
             p.resize(core::cmp::max(p.len(), chunk.len()), 0);
@@ -144,7 +146,7 @@ impl StripesMeta {
             self.unstriped.chunks.insert(id.to_string());
             update_parity(&mut self.unstriped.parity);
 
-            return (locations.head, HashMap::new());
+            return (locations.head, None);
         }
 
         update_parity(&mut self.in_progress.parity);
@@ -153,13 +155,18 @@ impl StripesMeta {
         let mut valid = locations
             .into_iter()
             .filter(|l| !self.in_progress_locations.contains(l))
-            .collect::<VecDeque<_>>();
+            .collect::<Vec<_>>();
 
-        let primary = valid.pop_front().unwrap();
+        // Since we pop from the end of the list later, we reverse the list to break ties by the
+        // first items in the locations list. Primarily for testing to be clearer.
+        valid.reverse();
+        valid.sort_by_key(|loc| *self.parity_counts.get(loc).unwrap_or(&0));
+
+        let primary = valid.pop().unwrap();
         self.in_progress_locations.insert(primary.clone());
 
-        let final_location = match (valid.pop_front(), valid.pop_front()) {
-            (Some(_), Some(_)) => return (primary, HashMap::new()),
+        let final_location = match (valid.pop(), valid.pop()) {
+            (Some(_), Some(_)) => return (primary, None),
             (Some(last), None) => last,
             (None, _) => unreachable!(),
         };
@@ -184,7 +191,9 @@ impl StripesMeta {
         };
         self.completed.insert(stripe_id, new_stripe);
 
-        (primary, hashmap! { final_location => to_finalize.parity })
+        *self.parity_counts.entry(final_location.clone()).or_insert(0) += 1;
+
+        (primary, Some((final_location, to_finalize.parity)))
     }
 
     fn chunks_needed(&self, recover: &str) -> IoResult<HashSet<&str>> {
@@ -320,6 +329,7 @@ fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maplit::*;
 
     #[test]
     fn xor_test() {
@@ -504,12 +514,7 @@ mod tests {
                 stripes.set("foo", &[0, 1, 2, 3], locations.clone());
                 assert_eq!(
                     stripes.set("bar", &[4, 5, 6, 7], locations.clone()),
-                    (
-                        Memory(43),
-                        hashmap! {
-                            Memory(44) => vec![4, 4, 4, 4],
-                        }
-                    ),
+                    (Memory(43), Some((Memory(44), vec![4, 4, 4, 4],))),
                 );
             }
 
@@ -568,6 +573,21 @@ mod tests {
                     ),
                     Ok(foo.to_vec())
                 );
+            }
+
+            #[test]
+            fn sends_parity_to_a_different_location() {
+                let mut stripes = StripesMeta::default();
+
+                let locations = nonempty![Memory(42), Memory(43), Memory(44)];
+
+                stripes.set("foo", &[1], locations.clone());
+                let first_parity_loc = stripes.set("bar", &[2], locations.clone()).1.unwrap().0;
+
+                stripes.set("baz", &[4], locations.clone());
+                let second_parity_loc = stripes.set("qux", &[8], locations.clone()).1.unwrap().0;
+
+                assert_ne!(first_parity_loc, second_parity_loc);
             }
         }
 
