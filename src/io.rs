@@ -46,3 +46,20 @@ impl From<std::io::Error> for IoError {
         }
     }
 }
+
+impl From<sled::Error> for IoError {
+    fn from(e: sled::Error) -> Self {
+        use sled::Error::*;
+
+        match e {
+            CollectionNotFound(_) => IoError::Internal,
+            Unsupported(_) => IoError::Internal,
+            ReportableBug(bug) => {
+                log::error!("Sled bug: {}", bug);
+                IoError::Internal
+            }
+            Io(e) => e.into(),
+            Corruption { .. } => IoError::InvalidData,
+        }
+    }
+}

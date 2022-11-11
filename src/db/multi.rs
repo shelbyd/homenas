@@ -5,19 +5,19 @@ use futures::future::*;
 
 pub struct Multi<T> {
     leader: T,
-    trees: Vec<T>,
+    followers: Vec<T>,
 }
 
 impl<T> Multi<T> {
-    pub fn new(leader: T, trees: impl IntoIterator<Item = T>) -> Multi<T> {
+    pub fn new(leader: T, followers: impl IntoIterator<Item = T>) -> Multi<T> {
         Multi {
             leader,
-            trees: trees.into_iter().collect(),
+            followers: followers.into_iter().collect(),
         }
     }
 
     fn all_trees(&self) -> impl Iterator<Item = &T> {
-        [&self.leader].into_iter().chain(&self.trees)
+        [&self.leader].into_iter().chain(&self.followers)
     }
 }
 
@@ -35,8 +35,8 @@ impl<T: Tree> Tree for Multi<T> {
         Ok(select_ok(futs).await.into_found()?.map(|(found, _)| found))
     }
 
-    async fn insert(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
-        try_join_all(self.all_trees().map(|t| t.insert(key, value))).await?;
+    async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
+        try_join_all(self.all_trees().map(|t| t.set(key, value))).await?;
         Ok(())
     }
 
@@ -50,7 +50,7 @@ impl<T: Tree> Tree for Multi<T> {
             return Ok(Err(e));
         }
 
-        try_join_all(self.trees.iter().map(|t| t.insert(key, new))).await?;
+        try_join_all(self.followers.iter().map(|t| t.set(key, new))).await?;
 
         Ok(Ok(()))
     }

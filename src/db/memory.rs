@@ -13,7 +13,7 @@ impl Tree for MemoryTree {
         Ok(self.map.get(key).map(|v| v.clone()))
     }
 
-    async fn insert(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
+    async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
         match value {
             Some(v) => {
                 self.map.insert(key.to_string(), v.to_vec());

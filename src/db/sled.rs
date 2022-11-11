@@ -16,11 +16,16 @@ impl Sled {
 #[async_trait::async_trait]
 impl Tree for Sled {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        todo!();
+        Ok(self.sled_tree.get(key)?.map(|iv| iv.to_vec()))
     }
 
-    async fn insert(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
-        todo!();
+    async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
+        match value {
+            Some(value) => self.sled_tree.insert(key, value)?,
+            None => self.sled_tree.remove(key)?,
+        };
+
+        Ok(())
     }
 
     async fn compare_and_swap<'p>(
@@ -29,6 +34,11 @@ impl Tree for Sled {
         old: Option<&[u8]>,
         new: Option<&'p [u8]>,
     ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
-        todo!()
+        let result = self.sled_tree.compare_and_swap(key, old, new)?;
+
+        Ok(result.map_err(|e| CompareAndSwapError {
+            proposed: new,
+            current: e.current.map(|iv| iv.to_vec()),
+        }))
     }
 }
