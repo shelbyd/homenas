@@ -36,33 +36,35 @@ fn smart_backing_dirs() -> Vec<PathBuf> {
     system.refresh_disks_list();
 
     log::info!("Detecting disks");
-    let paths = system
-        .disks()
-        .iter()
-        .filter(|d| should_use_disk(d))
-        .map(|d| d.mount_point().join(".homenas_storage"))
-        .collect();
+    let paths = system.disks().iter().filter_map(|d| disk_path(d)).collect();
     log::info!("Starting with paths: {:?}", &paths);
     paths
 }
 
-fn should_use_disk(disk: &Disk) -> bool {
+fn disk_path(disk: &Disk) -> Option<PathBuf> {
     log::info!("Determining if usable: {:?}", disk.name());
 
     if disk.name() == OsString::from("/dev/mapper/data-root") {
         log::info!("  Using unix data root disk");
-        return true;
+        if disk.mount_point() == PathBuf::from("/") {
+            let path = PROJECT_DIRS.data_dir().to_path_buf();
+            log::info!("    path: {:?}", path);
+            return Some(path);
+        }
+
+        log::warn!("Skipping unrecognized mount point for data root {:?}", disk.mount_point());
+        return None;
     }
 
     if disk.mount_point() == OsString::from("/recovery") {
         log::info!("Skipping unix recovery disk");
-        return false;
+        return None;
     }
 
     let is_uefi = disk.mount_point() == PathBuf::from("/boot/efi");
     if is_uefi {
         log::info!("  Skipping uefi partition");
-        return false;
+        return None;
     }
 
     log::warn!("Skipping unrecognized disk: {:?}", disk.name());
@@ -79,5 +81,5 @@ fn should_use_disk(disk: &Disk) -> bool {
     );
     log::info!("  removable: {}", disk.is_removable());
 
-    false
+    None
 }

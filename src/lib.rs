@@ -9,3 +9,10 @@ pub mod operating_system;
 
 #[cfg(test)]
 mod testing;
+
+use directories::*;
+
+lazy_static::lazy_static! {
+    static ref PROJECT_DIRS: ProjectDirs =
+        ProjectDirs::from("com", "51", "HomeNAS").expect("missing $HOME from operating system");
+}
