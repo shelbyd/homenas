@@ -52,9 +52,9 @@ impl StartCommand {
         let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
 
         if !self.fail_on_existing_mount {
-            crate::fuse::unmount(&self.mount_path)?;
+            crate::operating_system::unmount(&self.mount_path)?;
         }
-        crate::fuse::mount(fs, &self.mount_path)?;
+        crate::operating_system::mount(fs, &self.mount_path)?;
 
         Ok(())
     }
