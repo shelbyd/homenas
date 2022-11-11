@@ -112,12 +112,22 @@ impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
     }
 
     pub async fn create_file(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
-        self.add_entry_to_parent(parent, name, |node_id| Entry {
-            kind: DetailedKind::File(FileData { size: 0 }),
-            name: name.to_owned(),
-            node_id,
-        })
-        .await
+        log::info!(
+            "Creating file, (parent, name): ({}, {:?})",
+            parent,
+            name.to_str()
+        );
+
+        let entry = self
+            .add_entry_to_parent(parent, name, |node_id| Entry {
+                kind: DetailedKind::File(FileData { size: 0 }),
+                name: name.to_owned(),
+                node_id,
+            })
+            .await?;
+
+        log::info!("Created file {}", entry.node_id);
+        Ok(entry)
     }
 
     async fn add_entry_to_parent(
@@ -126,11 +136,6 @@ impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
         name: &OsStr,
         entry: impl FnOnce(NodeId) -> Entry,
     ) -> IoResult<Entry> {
-        log::debug!(
-            "add_entry_to_parent(parent, name): {:?}",
-            (parent, name.to_str())
-        );
-
         let new_node_id = self.get_next_node_id().await?;
         let entry = entry(new_node_id);
 
@@ -159,17 +164,33 @@ impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
     }
 
     pub async fn create_dir(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
-        self.add_entry_to_parent(parent, name, |node_id| Entry {
-            kind: DetailedKind::Directory(DirectoryData {
-                children: Default::default(),
-            }),
-            name: name.to_owned(),
-            node_id,
-        })
-        .await
+        log::info!(
+            "Creating directory, (parent, name): ({}, {:?})",
+            parent,
+            name.to_str()
+        );
+
+        let entry = self
+            .add_entry_to_parent(parent, name, |node_id| Entry {
+                kind: DetailedKind::Directory(DirectoryData {
+                    children: Default::default(),
+                }),
+                name: name.to_owned(),
+                node_id,
+            })
+            .await?;
+
+        log::info!("Created directory {}", entry.node_id);
+        Ok(entry)
     }
 
     pub async fn unlink(&self, parent: NodeId, name: &OsStr) -> IoResult<NodeId> {
+        log::info!(
+            "Unlinking entry, (parent, name): ({}, {:?})",
+            parent,
+            name.to_str()
+        );
+
         let (_, node_id) = self
             .update_entry(parent, |parent| {
                 Ok(parent
@@ -182,10 +203,13 @@ impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
             })
             .await?;
 
+        log::info!("Unlinked node {}", node_id);
         Ok(node_id)
     }
 
     pub async fn forget(&self, node: NodeId) -> IoResult<()> {
+        log::info!("Forgetting node {}", node);
+
         let entry = self.read_entry(node).await?;
         self.clear_entry(node).await?;
 

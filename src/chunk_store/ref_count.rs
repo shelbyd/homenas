@@ -67,7 +67,6 @@ where
 
         let newly_created = ref_count == 1;
         if newly_created {
-            log::info!("{}: Flushing chunk", id);
             self.backing.store(chunk).await?;
         } else {
             log::info!("{}: Already stored, not setting", id);
@@ -96,7 +95,6 @@ where
             .await?;
 
         if ref_count == 0 {
-            log::info!("{}: Dropping chunk", id);
             self.backing.drop(id).await?;
         } else {
             log::info!("{}: Still has ref-count {}", id, ref_count);

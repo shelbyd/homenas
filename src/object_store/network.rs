@@ -208,8 +208,12 @@ where
     }
 
     async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        log::warn!("TODO(shelbyd): Implement Network::connect");
-        self.backing.connect(location).await
+        if let Some(connection) = self.backing.connect(location).await.into_found()? {
+            return Ok(connection);
+        }
+
+        log::warn!("Unable to connect to location: {:?}", location);
+        Err(IoError::NotFound)
     }
 }
 

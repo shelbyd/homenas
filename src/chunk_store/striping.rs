@@ -283,9 +283,7 @@ impl StripesMeta {
         self.stripe_mut(id)?.drop(id, chunk);
 
         // Not tested. Please add a test that requires this remove.
-        if let None = self.chunk_stripe.remove(id) {
-            log::warn!("StripesMeta does not have chunk {}", id);
-        }
+        self.chunk_stripe.remove(id);
 
         Ok(())
     }
