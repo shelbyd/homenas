@@ -5,19 +5,14 @@ use flexi_logger::*;
 pub fn init() -> anyhow::Result<()> {
     let file_spec = FileSpec::default().directory(PROJECT_DIRS.data_dir().join("logs"));
 
-    #[allow(non_snake_case)]
-    let MiB = 1024 * 1024;
-    let total_log_size = 256 * MiB;
-    let max_file_size = 8 * MiB;
-
     Logger::try_with_str("info")?
         .log_to_file(file_spec.clone())
         .format_for_files(file_format)
         .print_message()
         .rotate(
-            Criterion::Size(max_file_size),
+            Criterion::Size(8 * 1024 * 1024), // 8 MiB
             Naming::Timestamps,
-            Cleanup::KeepLogFiles((total_log_size / max_file_size) as usize),
+            Cleanup::KeepLogAndCompressedFiles(8, 32),
         )
         .duplicate_to_stderr(Duplicate::Info)
         .format_for_stderr(stderr_format)
