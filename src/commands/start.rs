@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use structopt::*;
 
-use crate::{chunk_store::*, object_store::*, stores::*};
+use crate::{chunk_store::*, db::*, object_store::*, stores::*};
 
 #[derive(StructOpt, Debug)]
 #[allow(dead_code)] // TODO: Remove.
@@ -29,13 +29,25 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::commands::Options) -> anyhow::Result<()> {
-        let object_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
+        let _tree: Box<dyn Tree> = match &self.backing_dir[..] {
             [] => {
                 log::warn!("No backing-dir provided, only persisting to memory");
-                Box::new(Memory::default())
+                Box::new(crate::db::MemoryTree::default())
             }
+            [single] => Box::new(crate::db::Sled::new(single)?),
+            [leader, others @ ..] => Box::new(crate::db::Multi::new(
+                crate::db::Sled::new(leader)?,
+                others
+                    .iter()
+                    .map(crate::db::Sled::new)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+        };
+
+        let object_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
+            [] => Box::new(Memory::default()),
             [single] => Box::new(FileSystem::new(single)?),
-            [dirs @ ..] => Box::new(Multi::new(
+            [dirs @ ..] => Box::new(crate::stores::Multi::new(
                 dirs.iter()
                     .map(FileSystem::new)
                     .collect::<Result<Vec<_>, _>>()?,
