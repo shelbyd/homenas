@@ -41,6 +41,7 @@ features = [
 ]
 
 [dev-dependencies]
+env_logger = "0.9.3"
 lazy_static = "1.4.0"
 tempfile = "3.3.0"
 test-log = "0.2.11"
