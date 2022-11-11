@@ -2,6 +2,7 @@ use structopt::*;
 
 mod chunk_store;
 pub mod commands;
+mod db;
 mod fs;
 mod io;
 pub mod logging;

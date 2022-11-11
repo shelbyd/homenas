@@ -1,5 +1,4 @@
-use crate::io::*;
-use crate::object_store::*;
+use crate::{io::*, object_store::*};
 
 pub mod file_system;
 pub use file_system::*;
@@ -12,4 +11,3 @@ pub use multi::*;
 
 pub mod network;
 pub use network::*;
-

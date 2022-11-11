@@ -23,6 +23,7 @@ nonempty = "0.8.0"
 rand = "0.8.5"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_cbor = "0.11.2"
+sled = "0.34.7"
 structopt = "0.3.26"
 sysinfo = "0.26.7"
 thiserror = "1.0.37"
