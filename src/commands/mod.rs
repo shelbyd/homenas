@@ -36,8 +36,15 @@ fn smart_backing_dirs() -> Vec<PathBuf> {
     system.refresh_disks_list();
 
     log::info!("Detecting disks");
-    let paths = system.disks().iter().filter_map(|d| disk_path(d)).collect();
-    log::info!("Starting with paths: {:?}", &paths);
+    let paths: Vec<_> = system.disks().iter().filter_map(|d| disk_path(d)).collect();
+    if paths.is_empty() {
+        log::warn!("Starting with no paths");
+    } else {
+        log::info!("Starting with paths:");
+        for path in &paths {
+            log::info!("  - {}", path.display());
+        }
+    }
     paths
 }
 
@@ -52,7 +59,10 @@ fn disk_path(disk: &Disk) -> Option<PathBuf> {
             return Some(path);
         }
 
-        log::warn!("Skipping unrecognized mount point for data root {:?}", disk.mount_point());
+        log::warn!(
+            "Skipping unrecognized mount point for data root {:?}",
+            disk.mount_point()
+        );
         return None;
     }
 

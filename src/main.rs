@@ -4,7 +4,7 @@ use homenas::commands::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    homenas::logging::init()?;
 
     let options = Options::from_args();
 

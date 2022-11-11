@@ -4,6 +4,7 @@ mod chunk_store;
 pub mod commands;
 mod fs;
 mod io;
+pub mod logging;
 mod object_store;
 pub mod operating_system;
 
