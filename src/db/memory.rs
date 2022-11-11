@@ -37,7 +37,7 @@ impl Tree for MemoryTree {
         match (&entry, old) {
             (Entry::Occupied(current), Some(old)) if *current.get() == old => {}
             (Entry::Vacant(_), None) => {}
-            (current, old) => {
+            (current, _) => {
                 let current = match current {
                     Entry::Occupied(c) => Some(c.get().clone()),
                     Entry::Vacant(_) => None,

@@ -5,6 +5,7 @@ pub use typed::*;
 
 use crate::io::*;
 
+// #[deprecated]
 #[async_trait::async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn set(&self, key: &str, value: &[u8]) -> IoResult<()>;

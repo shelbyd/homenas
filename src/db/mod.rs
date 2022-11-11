@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use crate::io::*;
 
 mod memory;
@@ -24,6 +22,7 @@ pub trait Tree: Send + Sync {
     ) -> IoResult<Result<(), CompareAndSwapError<'p>>>;
 }
 
+#[allow(unused)]
 pub struct CompareAndSwapError<'p> {
     current: Option<Vec<u8>>,
     proposed: Option<&'p [u8]>,
