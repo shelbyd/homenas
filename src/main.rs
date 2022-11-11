@@ -1,6 +1,6 @@
 use structopt::*;
 
-use homenas::*;
+use homenas::commands::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -9,7 +9,8 @@ async fn main() -> anyhow::Result<()> {
     let options = Options::from_args();
 
     match &options.command {
-        Command::Start(cmd) => cmd.run(&options).await?,
+        Some(Command::Start(cmd)) => cmd.run(&options).await?,
+        None => create_smart_start().run(&options).await?,
     }
 
     Ok(())

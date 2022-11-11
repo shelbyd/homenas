@@ -7,25 +7,28 @@ use crate::{chunk_store::*, object_store::*};
 #[allow(dead_code)] // TODO: Remove.
 pub struct StartCommand {
     /// Local port to listen for peer connections.
-    #[structopt(long, default_value = "42000")]
-    listen_on: u16,
+    #[structopt(long, default_value = "36686")]
+    pub(crate) listen_on: u16,
 
     /// Peers to try to connect to.
     #[structopt(long)]
-    peers: Vec<SocketAddr>,
+    pub(crate) peers: Vec<SocketAddr>,
 
     /// Directories to store data to. If empty, will only store in memory.
     #[structopt(long)]
-    backing_dir: Vec<PathBuf>,
+    pub(crate) backing_dir: Vec<PathBuf>,
 
     /// Where to mount the homenas directory.
-    mount_path: PathBuf,
+    pub(crate) mount_path: PathBuf,
 }
 
 impl StartCommand {
-    pub async fn run(&self, _opts: &crate::Options) -> anyhow::Result<()> {
+    pub async fn run(&self, _opts: &crate::commands::Options) -> anyhow::Result<()> {
         let object_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
-            [] => Box::new(Memory::default()),
+            [] => {
+                log::warn!("No backing-dir provided, only persisting to memory");
+                Box::new(Memory::default())
+            }
             [single] => Box::new(FileSystem::new(single)?),
             [dirs @ ..] => Box::new(Multi::new(
                 dirs.iter()

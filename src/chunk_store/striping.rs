@@ -191,7 +191,10 @@ impl StripesMeta {
         };
         self.completed.insert(stripe_id, new_stripe);
 
-        *self.parity_counts.entry(final_location.clone()).or_insert(0) += 1;
+        *self
+            .parity_counts
+            .entry(final_location.clone())
+            .or_insert(0) += 1;
 
         (primary, Some((final_location, to_finalize.parity)))
     }
