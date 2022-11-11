@@ -26,7 +26,8 @@ pub fn create_smart_start() -> StartCommand {
         listen_on: 36686,
         peers: Vec::new(),
         backing_dir: smart_backing_dirs(),
-        mount_path: PathBuf::from("/mnt/homenas"),
+        fail_on_existing_mount: false,
+        mount_path: crate::operating_system::default_mount_path(),
     }
 }
 

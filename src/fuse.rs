@@ -8,6 +8,23 @@ use crate::{
     object_store::ObjectStore,
 };
 
+pub fn unmount(path: impl AsRef<Path>) -> anyhow::Result<()> {
+    let path = path.as_ref();
+
+    let status = std::process::Command::new("fusermount")
+        .arg("-u")
+        .arg(path)
+        .status()?;
+
+    if status.success() {
+        log::info!("Stopped FUSE running at {:?}", path);
+    } else {
+        log::info!("FUSE not running at {:?}", path);
+    }
+
+    Ok(())
+}
+
 pub fn mount<O, C>(fs: FileSystem<O, C>, path: impl AsRef<Path>) -> anyhow::Result<()>
 where
     O: ObjectStore + 'static,
@@ -15,12 +32,14 @@ where
 {
     let path = path.as_ref();
 
+    log::info!("Creating path {:?}", path);
     match std::fs::create_dir_all(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
 
+    log::info!("Mounting to {:?}", path);
     let session = Session::mount(path.to_path_buf(), KernelConfig::default()).map_err(|e| {
         if e.to_string().contains("too short control message length") {
             anyhow::anyhow!("FUSE already mounted at {}", path.to_string_lossy())
@@ -29,6 +48,7 @@ where
         }
     })?;
 
+    log::info!("Listening for FUSE requests");
     let fs = Arc::new(fs);
     while let Some(req) = session.next_request()? {
         let fs = Arc::clone(&fs);

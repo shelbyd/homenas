@@ -18,6 +18,11 @@ pub struct StartCommand {
     #[structopt(long)]
     pub(crate) backing_dir: Vec<PathBuf>,
 
+    #[structopt(long)]
+    /// By default, clear existing mount before trying to mount. If provided, will just try to
+    /// mount without clearing first.
+    pub(crate) fail_on_existing_mount: bool,
+
     /// Where to mount the homenas directory.
     pub(crate) mount_path: PathBuf,
 }
@@ -46,7 +51,11 @@ impl StartCommand {
 
         let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
 
+        if !self.fail_on_existing_mount {
+            crate::fuse::unmount(&self.mount_path)?;
+        }
         crate::fuse::mount(fs, &self.mount_path)?;
+
         Ok(())
     }
 }
