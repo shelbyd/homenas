@@ -2,6 +2,9 @@ use std::ops::Deref;
 
 use crate::{io::*, object_store::*};
 
+#[cfg(test)]
+use crate::stores::*;
+
 mod ref_count;
 pub use ref_count::*;
 

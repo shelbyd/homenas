@@ -7,6 +7,7 @@ mod io;
 pub mod logging;
 mod object_store;
 pub mod operating_system;
+mod stores;
 
 #[cfg(test)]
 mod testing;

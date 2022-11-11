@@ -48,7 +48,6 @@ fn de<T: DeserializeOwned>(bytes: &[u8]) -> IoResult<T> {
 }
 
 /// Update the value at the provided key. May retry until successful.
-#[deprecated(note = "Use tree instead")]
 pub async fn update_typed<T, R, F, O>(store: &O, key: &str, mut f: F) -> IoResult<R>
 where
     O: ObjectStore,

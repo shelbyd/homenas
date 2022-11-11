@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use structopt::*;
 
-use crate::{chunk_store::*, object_store::*};
+use crate::{chunk_store::*, object_store::*, stores::*};
 
 #[derive(StructOpt, Debug)]
 #[allow(dead_code)] // TODO: Remove.
