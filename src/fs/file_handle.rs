@@ -1,7 +1,7 @@
 use std::io::BufRead;
 
 use super::*;
-use crate::object_store::*;
+use crate::db::*;
 
 #[derive(Serialize, Deserialize)]
 struct ChunkIds {
@@ -9,9 +9,9 @@ struct ChunkIds {
     chunks: BTreeMap<u64, ChunkRef>,
 }
 
-pub struct FileHandle<C, O> {
+pub struct FileHandle<C, T> {
     chunk_store: C,
-    object_store: O,
+    tree: T,
     chunk_size: u32,
     chunks: BTreeMap<u64, Chunk>,
     meta_key: String,
@@ -32,17 +32,16 @@ struct ChunkRef {
     size: u32,
 }
 
-impl<C: ChunkStore, O: ObjectStore> FileHandle<C, O> {
+impl<C: ChunkStore, T: Tree> FileHandle<C, T> {
     pub async fn create(
         chunk_store: C,
         chunk_size: u32,
         meta_key: &str,
-        object_store: O,
+        tree: T,
     ) -> IoResult<Self> {
-        let ids = object_store
+        let ids = tree
             .get_typed::<ChunkIds>(meta_key)
-            .await
-            .into_found()?
+            .await?
             .unwrap_or_else(|| ChunkIds::new(chunk_size));
 
         if chunk_size != ids.chunk_size {
@@ -61,7 +60,7 @@ impl<C: ChunkStore, O: ObjectStore> FileHandle<C, O> {
 
         Ok(Self {
             chunk_store,
-            object_store,
+            tree,
             chunk_size: chunk_size,
             chunks,
             meta_key: meta_key.to_string(),
@@ -162,8 +161,8 @@ impl<C: ChunkStore, O: ObjectStore> FileHandle<C, O> {
             chunk_ids.chunks.insert(*offset, ref_);
         }
 
-        self.object_store
-            .set_typed::<ChunkIds>(&self.meta_key, &chunk_ids)
+        self.tree
+            .set_typed::<ChunkIds>(&self.meta_key, Some(&chunk_ids))
             .await
     }
 
@@ -176,7 +175,7 @@ impl<C: ChunkStore, O: ObjectStore> FileHandle<C, O> {
             chunk.forget(&self.chunk_store).await?;
         }
 
-        self.object_store.clear(&self.meta_key).await?;
+        self.tree.set(&self.meta_key, None).await?;
         Ok(())
     }
 }
@@ -256,11 +255,10 @@ fn chunk_range(chunk_size: u32, start: u64, end: u64) -> (u64, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stores::*;
 
     const ONE_MB: u32 = 1024 * 1024; // 1 MiB
 
-    async fn create<'l, C: ChunkStore, O: ObjectStore>(c: C, o: O, size: u32) -> FileHandle<C, O> {
+    async fn create<'l, C: ChunkStore, T: Tree>(c: C, o: T, size: u32) -> FileHandle<C, T> {
         FileHandle::create(c, size, "files/test.meta", o)
             .await
             .unwrap()
@@ -277,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn created_file_has_no_contents() {
         let mem = memory_chunk_store();
-        let fh = create(&mem, Memory::default(), ONE_MB).await;
+        let fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         assert_eq!(fh.read(0, 4096).await, Ok(Vec::new()));
     }
@@ -285,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn after_write_has_written() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), ONE_MB).await;
+        let mut fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
 
@@ -295,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn write_with_offset() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), ONE_MB).await;
+        let mut fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         fh.write(3, 3, &[1, 2, 3][..]).await.unwrap();
 
@@ -305,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn write_chunk_prefix() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), ONE_MB).await;
+        let mut fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         fh.write(3, 3, &[3, 4, 5][..]).await.unwrap();
         fh.write(0, 3, &[0, 1, 2][..]).await.unwrap();
@@ -316,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn write_full_chunk_flushes() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), 4).await;
+        let mut fh = create(&mem, MemoryTree::default(), 4).await;
 
         fh.write(0, 4, &[1, 2, 3, 4][..]).await.unwrap();
 
@@ -327,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn multipart_write_flushes_chunk() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), 4).await;
+        let mut fh = create(&mem, MemoryTree::default(), 4).await;
 
         fh.write(0, 2, &[1, 2][..]).await.unwrap();
         fh.write(2, 2, &[3, 4][..]).await.unwrap();
@@ -339,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn multipart_write_past_chunk() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), 4).await;
+        let mut fh = create(&mem, MemoryTree::default(), 4).await;
 
         fh.write(0, 2, &[1, 2][..]).await.unwrap();
         fh.write(2, 4, &[3, 4, 5, 6][..]).await.unwrap();
@@ -351,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn three_chunks_of_writes() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), 4).await;
+        let mut fh = create(&mem, MemoryTree::default(), 4).await;
 
         let zero_to_twelve = (0..12).collect::<Vec<_>>();
         fh.write(0, 12, zero_to_twelve.as_slice()).await.unwrap();
@@ -368,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn another_instance_has_written() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
+        let mem_os = MemoryTree::default();
         let mut fh = create(&mem, &mem_os, 4).await;
 
         fh.write(0, 4, &[0, 1, 2, 3][..]).await.unwrap();
@@ -381,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn read_starts_past_data() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), ONE_MB).await;
+        let mut fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         assert_eq!(fh.write(0, 3, &b"foo"[..]).await, Ok(3));
 
@@ -391,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn forget_clears_store() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), ONE_MB).await;
+        let mut fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         fh.write(0, 3, &b"foo"[..]).await.unwrap();
         fh.flush().await.unwrap();
@@ -403,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn forget_after_change_is_empty() {
         let mem = memory_chunk_store();
-        let mut fh = create(&mem, Memory::default(), ONE_MB).await;
+        let mut fh = create(&mem, MemoryTree::default(), ONE_MB).await;
 
         fh.write(0, 3, &b"foo"[..]).await.unwrap();
         fh.flush().await.unwrap();

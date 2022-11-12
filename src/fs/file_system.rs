@@ -8,10 +8,11 @@ use crate::{
 };
 
 pub struct FileSystem<O, C, T> {
+    #[allow(unused)]
     object_store: O,
     chunk_store: C,
     tree: T,
-    open_handles: DashMap<NodeId, FileHandle<C, O>>,
+    open_handles: DashMap<NodeId, FileHandle<C, T>>,
 }
 
 impl<O, C, T> FileSystem<O, C, T> {
@@ -233,12 +234,12 @@ impl<O: ObjectStore + Clone, C: ChunkStore + Clone, T: Tree + Clone> FileSystem<
         }
     }
 
-    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<C, O>> {
+    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<C, T>> {
         let handle = FileHandle::create(
             self.chunk_store.clone(),
             1024 * 1024,
             &format!("file/{}.chunks", node),
-            self.object_store.clone(),
+            self.tree.clone(),
         )
         .await?;
         Ok(handle)
