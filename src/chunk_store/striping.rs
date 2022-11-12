@@ -14,7 +14,6 @@ type StripeId = String;
 pub struct Striping<C, T> {
     backing: C,
     tree: T,
-    meta_prefix: String,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -38,16 +37,8 @@ struct Stripe {
 }
 
 impl<C: ChunkStore, T: Tree> Striping<C, T> {
-    pub fn new(backing: C, meta_prefix: &str, tree: T) -> Self {
-        Striping {
-            backing,
-            tree,
-            meta_prefix: meta_prefix.to_string(),
-        }
-    }
-
-    fn stripe_key(&self) -> String {
-        format!("{}/stripes", self.meta_prefix)
+    pub fn new(backing: C, tree: T) -> Self {
+        Striping { backing, tree }
     }
 
     async fn update_meta<R: Send>(
@@ -55,7 +46,7 @@ impl<C: ChunkStore, T: Tree> Striping<C, T> {
         _id: &str,
         mut f: impl FnMut(&mut StripesMeta) -> R + Send,
     ) -> IoResult<R> {
-        update_typed(&self.tree, &self.stripe_key(), |meta| {
+        update_typed(&self.tree, "stripes", |meta| {
             let mut meta = meta.unwrap_or_default();
 
             let r = f(&mut meta);
@@ -78,7 +69,7 @@ impl<C: ChunkStore, T: Tree> ChunkStore for Striping<C, T> {
 
         let stripes = self
             .tree
-            .get_typed::<StripesMeta>(&self.stripe_key())
+            .get_typed::<StripesMeta>("stripes")
             .await?
             .unwrap_or_default();
 
@@ -347,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn single_insert_inserts_to_backing() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta", MemoryTree::default());
+        let store = Striping::new(&mem, MemoryTree::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
 
@@ -357,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn recovers_first_write_after_underlying_failure() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta", MemoryTree::default());
+        let store = Striping::new(&mem, MemoryTree::default());
 
         let first = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.store(&[4, 5, 6, 7]).await.unwrap();
@@ -371,14 +362,14 @@ mod tests {
     async fn another_instance_recovers_first_write_after_underlying_failure() {
         let mem = memory_chunk_store();
         let mem_os = MemoryTree::default();
-        let store = Striping::new(&mem, "meta", &mem_os);
+        let store = Striping::new(&mem, &mem_os);
 
         let first = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.store(&[4, 5, 6, 7]).await.unwrap();
         mem.drop(&first).await.unwrap();
 
         assert_eq!(
-            Striping::new(&mem, "meta", &mem_os).read(&first).await,
+            Striping::new(&mem, &mem_os).read(&first).await,
             Ok(vec![0, 1, 2, 3])
         );
     }
@@ -390,7 +381,7 @@ mod tests {
         let backing_3 = MemChunkStore::default();
         let chunk_store = crate::chunk_store::Multi::new([&backing_1, &backing_2, &backing_3]);
 
-        let store = Striping::new(&chunk_store, "meta", MemoryTree::default());
+        let store = Striping::new(&chunk_store, MemoryTree::default());
 
         let first = store.store(&[1]).await.unwrap();
         let second = store.store(&[2]).await.unwrap();

@@ -6,7 +6,6 @@ use super::*;
 pub struct RefCount<C, T> {
     backing: C,
     tree: T,
-    meta_key: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -15,12 +14,8 @@ struct ChunkMeta {
 }
 
 impl<C, T> RefCount<C, T> {
-    pub fn new(backing: C, meta_key: &str, tree: T) -> Self {
-        Self {
-            backing,
-            tree,
-            meta_key: meta_key.to_string(),
-        }
+    pub fn new(backing: C, tree: T) -> Self {
+        Self { backing, tree }
     }
 }
 
@@ -30,17 +25,13 @@ impl<C: ChunkStore, T: Tree> RefCount<C, T> {
         _id: &str,
         mut f: impl FnMut(&mut ChunkMeta) -> R + Send,
     ) -> IoResult<R> {
-        update_typed(
-            &self.tree,
-            &format!("{}/ref-counts", self.meta_key),
-            |meta: Option<ChunkMeta>| {
-                let mut meta = meta.unwrap_or_default();
+        update_typed(&self.tree, "ref_counts", |meta: Option<ChunkMeta>| {
+            let mut meta = meta.unwrap_or_default();
 
-                let r = f(&mut meta);
+            let r = f(&mut meta);
 
-                Ok((Some(meta), r))
-            },
-        )
+            Ok((Some(meta), r))
+        })
         .await
     }
 }
@@ -116,7 +107,7 @@ mod tests {
     #[tokio::test]
     async fn empty_store() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         assert_eq!(store.read("foobarbaz").await, Err(IoError::NotFound));
     }
@@ -124,7 +115,7 @@ mod tests {
     #[tokio::test]
     async fn store_allows_read() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
 
@@ -134,7 +125,7 @@ mod tests {
     #[tokio::test]
     async fn store_to_new_creates() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
         let after_one = mem.len();
@@ -146,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn store_to_existing_does_not_create() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
         let after_one = mem.len();
@@ -158,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn drop_removes_from_backing() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.drop(&id).await.unwrap();
@@ -169,7 +160,7 @@ mod tests {
     #[tokio::test]
     async fn separate_stores_and_single_drop_keeps() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         let second_id = store.store(&[0, 1, 2, 3]).await.unwrap();
@@ -183,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn double_store_does_not_set() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta", MemoryTree::default());
+        let store = RefCount::new(&mem, MemoryTree::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         mem.drop(&id).await.unwrap();
