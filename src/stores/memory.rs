@@ -51,18 +51,6 @@ impl ObjectStore for Memory {
         write.insert(key.to_string(), new.to_vec());
         Ok(true)
     }
-
-    async fn locations(&self) -> IoResult<Vec<Location>> {
-        Ok(vec![Location::Memory(self.id)])
-    }
-
-    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        if *location != Location::Memory(self.id) {
-            return Err(IoError::NotFound);
-        }
-
-        Ok(Box::new(self))
-    }
 }
 
 impl Default for Memory {

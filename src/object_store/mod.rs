@@ -19,9 +19,6 @@ pub trait ObjectStore: Send + Sync {
         current: Option<&[u8]>,
         new: &[u8],
     ) -> IoResult<bool>;
-
-    async fn locations(&self) -> IoResult<Vec<Location>>;
-    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>>;
 }
 
 /// Update the value at the provided key. May retry until successful.
@@ -84,12 +81,5 @@ where
         new: &[u8],
     ) -> IoResult<bool> {
         (**self).compare_exchange(key, current, new).await
-    }
-
-    async fn locations(&self) -> IoResult<Vec<Location>> {
-        (**self).locations().await
-    }
-    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        (**self).connect(location).await
     }
 }

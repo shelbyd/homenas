@@ -1,5 +1,7 @@
 use structopt::*;
 
+// TODO(shelbyd): Store combinators implement all store types.
+
 mod chunk_store;
 pub mod commands;
 mod db;

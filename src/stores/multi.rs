@@ -48,18 +48,4 @@ impl<O: ObjectStore> ObjectStore for Multi<O> {
         let results = join_all(futs).await;
         results.into_iter().fold(Ok(true), |acc, v| Ok(acc? && v?))
     }
-
-    async fn locations(&self) -> IoResult<Vec<Location>> {
-        Ok(try_join_all(self.stores.iter().map(|s| s.locations()))
-            .await?
-            .into_iter()
-            .flat_map(|ls| ls)
-            .collect())
-    }
-
-    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        Ok(select_ok(self.stores.iter().map(|s| s.connect(location)))
-            .await?
-            .0)
-    }
 }

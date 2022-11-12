@@ -103,10 +103,6 @@ where
                 let found = self.backing.get(&k).await?;
                 Ok(Box::new(response::Fetch(found)))
             }
-            Request::Locations => {
-                let locations = self.backing.locations().await?;
-                Ok(Box::new(response::Locations(locations)))
-            }
         }
     }
 
@@ -189,32 +185,6 @@ where
 
         Ok(true)
     }
-
-    async fn locations(&self) -> IoResult<Vec<Location>> {
-        let from_peers = try_join_all(
-            self.peers
-                .iter()
-                .map(|p| p.request::<response::Locations>(Request::Locations)),
-        );
-        let from_backing = self.backing.locations();
-
-        let (peers, backing) = try_join(from_peers, from_backing).await?;
-        Ok(peers
-            .into_iter()
-            .map(|resp| resp.0)
-            .flat_map(|peer| peer)
-            .chain(backing)
-            .collect())
-    }
-
-    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        if let Some(connection) = self.backing.connect(location).await.into_found()? {
-            return Ok(connection);
-        }
-
-        log::warn!("Unable to connect to location: {:?}", location);
-        Err(IoError::NotFound)
-    }
 }
 
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -233,7 +203,6 @@ pub enum Event {
 #[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Request {
     Fetch(String),
-    Locations,
 }
 
 mod response {

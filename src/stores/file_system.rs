@@ -11,28 +11,12 @@ use super::*;
 
 pub struct FileSystem {
     path: PathBuf,
-    id: u64,
 }
 
 impl FileSystem {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let path = path.as_ref();
-
-        let id_path = path.join("directory-id");
-        std::fs::create_dir_all(id_path.parent().unwrap())?;
-        let id = match std::fs::read(&id_path) {
-            Ok(bytes) => serde_cbor::from_slice(&bytes)?,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                let id = rand::random();
-                std::fs::write(&id_path, &serde_cbor::to_vec(&id)?)?;
-                id
-            }
-            Err(e) => return Err(anyhow::anyhow!(e)),
-        };
-
         Ok(FileSystem {
-            path: path.to_path_buf(),
-            id,
+            path: path.as_ref().to_path_buf(),
         })
     }
 
@@ -111,18 +95,6 @@ impl ObjectStore for FileSystem {
         file.rewind().await?;
         file.write_all(&new).await?;
         Ok(true)
-    }
-
-    async fn locations(&self) -> IoResult<Vec<Location>> {
-        Ok(vec![Location::Directory(self.id)])
-    }
-
-    async fn connect(&self, location: &Location) -> IoResult<Box<dyn ObjectStore + '_>> {
-        if *location != Location::Directory(self.id) {
-            return Err(IoError::NotFound);
-        }
-
-        Ok(Box::new(self))
     }
 }
 
