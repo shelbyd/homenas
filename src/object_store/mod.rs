@@ -21,23 +21,6 @@ pub trait ObjectStore: Send + Sync {
     ) -> IoResult<bool>;
 }
 
-/// Update the value at the provided key. May retry until successful.
-pub async fn update<R, F, O>(store: &O, key: &str, mut f: F) -> IoResult<R>
-where
-    O: ObjectStore,
-    F: for<'v> FnMut(Option<&'v [u8]>) -> IoResult<(Vec<u8>, R)> + Send,
-    R: Send,
-{
-    loop {
-        let read = store.get(&key).await.into_found()?;
-        let read = read.as_ref().map(|vec| vec.as_slice());
-        let (new, ret) = f(read)?;
-        if store.compare_exchange(&key, read, &new).await? {
-            return Ok(ret);
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 pub enum Location {
     Memory(u64),

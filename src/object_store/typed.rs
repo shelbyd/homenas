@@ -46,20 +46,3 @@ fn de<T: DeserializeOwned>(bytes: &[u8]) -> IoResult<T> {
         IoError::InvalidData
     })
 }
-
-/// Update the value at the provided key. May retry until successful.
-pub async fn update_typed<T, R, F, O>(store: &O, key: &str, mut f: F) -> IoResult<R>
-where
-    O: ObjectStore,
-    F: for<'v> FnMut(Option<T>) -> IoResult<(T, R)> + Send,
-    T: Serialize + DeserializeOwned,
-    R: Send,
-{
-    super::update(store, key, |read| {
-        let t = read.map(|r| de(r)).transpose()?;
-        let (new_t, r) = f(t)?;
-        let bytes = ser(&new_t)?;
-        Ok((bytes, r))
-    })
-    .await
-}

@@ -70,7 +70,7 @@ impl StartCommand {
         let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&tree));
         let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&tree));
 
-        let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
+        let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store), Arc::clone(&tree));
 
         if !self.fail_on_existing_mount {
             crate::operating_system::unmount(&self.mount_path)?;
