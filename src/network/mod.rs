@@ -17,7 +17,7 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
         backing_tree: T,
         backing_chunks: C,
         _listen_on: u16,
-        _peers: &[SocketAddr],
+        peers: &[SocketAddr],
         state_dir: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
         let state_dir = state_dir.as_ref();
@@ -29,7 +29,7 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
             .unwrap_or(Ok(rand::random()))?;
 
         let mut network = raft::Network {};
-        let mut members = network.discover().await?;
+        let mut members = network.discover(peers).await?;
         members.insert(node_id);
 
         let raft = Raft::new(

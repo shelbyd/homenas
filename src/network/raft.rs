@@ -26,7 +26,7 @@ pub struct Storage<T: Tree> {
 }
 
 impl Network {
-    pub async fn discover(&mut self) -> anyhow::Result<HashSet<NodeId>> {
+    pub async fn discover(&mut self, peers: &[SocketAddr]) -> anyhow::Result<HashSet<NodeId>> {
         log::warn!("TODO(shelbyd): Implement network discovery, or at least use args");
         Ok(HashSet::default())
     }

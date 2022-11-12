@@ -22,6 +22,9 @@ pub struct StartCommand {
     /// mount without clearing first.
     pub(crate) fail_on_existing_mount: bool,
 
+    #[structopt(long)]
+    pub(crate) network_state_dir: Option<PathBuf>,
+
     /// Where to mount the homenas directory.
     pub(crate) mount_path: PathBuf,
 }
@@ -59,7 +62,10 @@ impl StartCommand {
                 chunk_store,
                 self.listen_on,
                 &self.peers,
-                PROJECT_DIRS.data_dir(),
+                self.network_state_dir
+                    .as_ref()
+                    .map(PathBuf::as_path)
+                    .unwrap_or(PROJECT_DIRS.data_dir()),
             )
             .await?,
         );
