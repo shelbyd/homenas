@@ -58,8 +58,8 @@ impl StartCommand {
         let object_store = Arc::new(object_store);
 
         let chunk_store = Direct::new(Arc::clone(&object_store), "chunks");
-        let chunk_store = Striping::new(chunk_store, "meta/chunks");
-        let chunk_store = RefCount::new(chunk_store, "meta/chunks");
+        let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
+        let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
 
         let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
 

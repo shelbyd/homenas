@@ -3,8 +3,9 @@ use std::collections::HashMap;
 
 use super::*;
 
-pub struct RefCount<C> {
+pub struct RefCount<C, O> {
     backing: C,
+    object: O,
     meta_key: String,
 }
 
@@ -13,23 +14,24 @@ struct ChunkMeta {
     counts: HashMap<String, u64>,
 }
 
-impl<C> RefCount<C> {
-    pub fn new(backing: C, meta_key: &str) -> Self {
+impl<C, O> RefCount<C, O> {
+    pub fn new(backing: C, meta_key: &str, object: O) -> Self {
         Self {
             backing,
+            object,
             meta_key: meta_key.to_string(),
         }
     }
 }
 
-impl<C: ChunkStore> RefCount<C> {
+impl<C: ChunkStore, O: ObjectStore> RefCount<C, O> {
     async fn update_meta<R: Send>(
         &self,
         _id: &str,
         mut f: impl FnMut(&mut ChunkMeta) -> R + Send,
     ) -> IoResult<R> {
         update_typed(
-            self.backing.object(),
+            &self.object,
             &format!("{}/ref-counts", self.meta_key),
             |meta: Option<ChunkMeta>| {
                 let mut meta = meta.unwrap_or_default();
@@ -44,12 +46,11 @@ impl<C: ChunkStore> RefCount<C> {
 }
 
 #[async_trait::async_trait]
-impl<C> ChunkStore for RefCount<C>
+impl<C, O> ChunkStore for RefCount<C, O>
 where
     C: ChunkStore,
+    O: ObjectStore,
 {
-    type Backing = C::Backing;
-
     async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
         self.backing.read(id).await
     }
@@ -103,8 +104,8 @@ where
         Ok(())
     }
 
-    fn object(&self) -> &Self::Backing {
-        self.backing.object()
+    async fn locations(&self) -> IoResult<HashSet<Location>> {
+        self.backing.locations().await
     }
 }
 
@@ -115,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn empty_store() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         assert_eq!(store.read("foobarbaz").await, Err(IoError::NotFound));
     }
@@ -123,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn store_allows_read() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
 
@@ -133,7 +134,7 @@ mod tests {
     #[tokio::test]
     async fn store_to_new_creates() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
         let after_one = mem.backing.len();
@@ -145,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn store_to_existing_does_not_create() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
         let after_one = mem.backing.len();
@@ -157,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn drop_removes_from_backing() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.drop(&id).await.unwrap();
@@ -168,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn separate_stores_and_single_drop_keeps() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         let second_id = store.store(&[0, 1, 2, 3]).await.unwrap();
@@ -182,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn double_store_does_not_set() {
         let mem = memory_chunk_store();
-        let store = RefCount::new(&mem, "meta");
+        let store = RefCount::new(&mem, "meta", Memory::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         mem.drop(&id).await.unwrap();

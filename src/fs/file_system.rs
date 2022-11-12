@@ -7,7 +7,7 @@ use crate::object_store::{self, *};
 pub struct FileSystem<O, C> {
     object_store: O,
     chunk_store: C,
-    open_handles: DashMap<NodeId, FileHandle<C>>,
+    open_handles: DashMap<NodeId, FileHandle<C, O>>,
 }
 
 impl<O, C> FileSystem<O, C> {
@@ -25,7 +25,7 @@ enum Contents {
     Raw(Vec<u8>),
 }
 
-impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
+impl<O: ObjectStore + Clone, C: ChunkStore + Clone> FileSystem<O, C> {
     pub async fn lookup(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
         let parent = self.read_entry(parent).await?;
 
@@ -235,11 +235,12 @@ impl<O: ObjectStore, C: ChunkStore + Clone> FileSystem<O, C> {
         }
     }
 
-    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<C>> {
+    async fn create_handle(&self, node: NodeId) -> IoResult<FileHandle<C, O>> {
         let handle = FileHandle::create(
             self.chunk_store.clone(),
             1024 * 1024,
             &format!("file/{}.chunks", node),
+            self.object_store.clone(),
         )
         .await?;
         Ok(handle)

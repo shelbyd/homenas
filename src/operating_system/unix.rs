@@ -26,7 +26,7 @@ pub fn unmount(path: impl AsRef<Path>) -> anyhow::Result<()> {
 
 pub fn mount<O, C>(fs: FileSystem<O, C>, path: impl AsRef<Path>) -> anyhow::Result<()>
 where
-    O: ObjectStore + 'static,
+    O: ObjectStore + Clone + 'static,
     C: ChunkStore + Clone + 'static,
 {
     let path = path.as_ref();
@@ -76,7 +76,7 @@ async fn process_operation<'r, O, C>(
     op: Operation<'r, Data<'r>>,
 ) -> Result<Box<dyn polyfuse::bytes::Bytes>, IoError>
 where
-    O: ObjectStore + 'static,
+    O: ObjectStore + Clone + 'static,
     C: ChunkStore + Clone + 'static,
 {
     match op {

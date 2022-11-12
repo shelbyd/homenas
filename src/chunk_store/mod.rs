@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{collections::HashSet, ops::Deref};
 
 use crate::{io::*, object_store::*};
 
@@ -28,8 +28,6 @@ pub fn id_for(chunk: &[u8]) -> String {
 
 #[async_trait::async_trait]
 pub trait ChunkStore: Send + Sync {
-    type Backing: ObjectStore;
-
     async fn read(&self, id: &str) -> IoResult<Vec<u8>>;
 
     // TODO(shelbyd): Provide id alongside chunk.
@@ -38,7 +36,7 @@ pub trait ChunkStore: Send + Sync {
 
     async fn drop(&self, id: &str) -> IoResult<()>;
 
-    fn object(&self) -> &Self::Backing;
+    async fn locations(&self) -> IoResult<HashSet<Location>>;
 }
 
 #[async_trait::async_trait]
@@ -47,8 +45,6 @@ where
     P: Deref + Send + Sync,
     P::Target: ChunkStore + Sized,
 {
-    type Backing = <P::Target as ChunkStore>::Backing;
-
     async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
         (**self).read(id).await
     }
@@ -61,11 +57,12 @@ where
     async fn drop(&self, id: &str) -> IoResult<()> {
         (**self).drop(id).await
     }
-    fn object(&self) -> &Self::Backing {
-        (**self).object()
+    async fn locations(&self) -> IoResult<HashSet<Location>> {
+        (**self).locations().await
     }
 }
 
+// #[deprecated]
 #[derive(Debug)]
 pub struct Direct<O> {
     // TODO(shelbyd): Not pub.
@@ -96,8 +93,6 @@ impl<O> ChunkStore for Direct<O>
 where
     O: ObjectStore,
 {
-    type Backing = O;
-
     async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
         log::debug!("{}: Reading", &id[..6]);
         let ok = self.backing.get(&self.storage_key(id)).await?;
@@ -121,8 +116,9 @@ where
     async fn drop(&self, id: &str) -> IoResult<()> {
         self.backing.clear(&self.storage_key(id)).await
     }
-    fn object(&self) -> &Self::Backing {
-        &self.backing
+
+    async fn locations(&self) -> IoResult<HashSet<Location>> {
+        Ok(self.backing.locations().await?.into_iter().collect())
     }
 }
 

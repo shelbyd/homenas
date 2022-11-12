@@ -10,8 +10,9 @@ use super::*;
 type ChunkId = String;
 type StripeId = String;
 
-pub struct Striping<C> {
+pub struct Striping<C, O> {
     backing: C,
+    object: O,
     meta_prefix: String,
 }
 
@@ -35,10 +36,11 @@ struct Stripe {
     chunks: HashSet<ChunkId>,
 }
 
-impl<C: ChunkStore> Striping<C> {
-    pub fn new(backing: C, meta_prefix: &str) -> Self {
+impl<C: ChunkStore, O: ObjectStore> Striping<C, O> {
+    pub fn new(backing: C, meta_prefix: &str, object: O) -> Self {
         Striping {
             backing,
+            object,
             meta_prefix: meta_prefix.to_string(),
         }
     }
@@ -52,7 +54,7 @@ impl<C: ChunkStore> Striping<C> {
         _id: &str,
         mut f: impl FnMut(&mut StripesMeta) -> R + Send,
     ) -> IoResult<R> {
-        update_typed(self.backing.object(), &self.stripe_key(), |meta| {
+        update_typed(&self.object, &self.stripe_key(), |meta| {
             let mut meta = meta.unwrap_or_default();
 
             let r = f(&mut meta);
@@ -64,13 +66,7 @@ impl<C: ChunkStore> Striping<C> {
 }
 
 #[async_trait::async_trait]
-impl<C: ChunkStore> ChunkStore for Striping<C> {
-    type Backing = C::Backing;
-
-    fn object(&self) -> &Self::Backing {
-        self.backing.object()
-    }
-
+impl<C: ChunkStore, O: ObjectStore> ChunkStore for Striping<C, O> {
     async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
         log::debug!("{}: Reading", &id[..4]);
         if let Some(r) = self.backing.read(id).await.into_found()? {
@@ -80,7 +76,7 @@ impl<C: ChunkStore> ChunkStore for Striping<C> {
         log::warn!("{}: Lost, recovering from stripe", &id[..6]);
 
         let stripes = self
-            .object()
+            .object
             .get_typed::<StripesMeta>(&self.stripe_key())
             .await?;
 
@@ -99,7 +95,7 @@ impl<C: ChunkStore> ChunkStore for Striping<C> {
     async fn store(&self, chunk: &[u8]) -> IoResult<String> {
         let id = id_for(chunk);
 
-        let locations = self.object().locations().await?;
+        let locations = self.locations().await?.into_iter().collect();
         let locations = NonEmpty::from_vec(locations).ok_or(IoError::Io)?;
 
         let (store_at, parity_chunk) = self
@@ -126,6 +122,10 @@ impl<C: ChunkStore> ChunkStore for Striping<C> {
         self.backing.drop(id).await?;
 
         Ok(())
+    }
+
+    async fn locations(&self) -> IoResult<HashSet<Location>> {
+        self.backing.locations().await
     }
 }
 
@@ -344,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn single_insert_inserts_to_backing() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta");
+        let store = Striping::new(&mem, "meta", &mem.backing);
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
 
@@ -354,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn recovers_first_write_after_underlying_failure() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta");
+        let store = Striping::new(&mem, "meta", &mem.backing);
 
         let first = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.store(&[4, 5, 6, 7]).await.unwrap();
@@ -367,14 +367,15 @@ mod tests {
     #[tokio::test]
     async fn another_instance_recovers_first_write_after_underlying_failure() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta");
+        let mem_os = &mem.backing;
+        let store = Striping::new(&mem, "meta", mem_os);
 
         let first = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.store(&[4, 5, 6, 7]).await.unwrap();
         mem.drop(&first).await.unwrap();
 
         assert_eq!(
-            Striping::new(&mem, "meta").read(&first).await,
+            Striping::new(&mem, "meta", mem_os).read(&first).await,
             Ok(vec![0, 1, 2, 3])
         );
     }
@@ -387,7 +388,7 @@ mod tests {
         let backing = Multi::new([&backing_1, &backing_2, &backing_3]);
         let direct = Direct::new(&backing, "chunks");
 
-        let store = Striping::new(&direct, "meta");
+        let store = Striping::new(&direct, "meta", &backing);
 
         let first = store.store(&[1]).await.unwrap();
         let second = store.store(&[2]).await.unwrap();
