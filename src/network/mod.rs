@@ -17,6 +17,11 @@ pub struct NetworkStore<T: Tree + 'static, C> {
     transport: Arc<Transport>,
 }
 
+enum StrongRead {
+    Ok,
+    ForwardTo(NodeId),
+}
+
 impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
     pub async fn create(
         backing_tree: T,
@@ -64,6 +69,52 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
     }
 }
 
+impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
+    async fn strong_read(&self) -> IoResult<StrongRead> {
+        let maybe_leader = match self.raft.client_read().await {
+            Ok(()) => return Ok(StrongRead::Ok),
+            Err(ClientReadError::RaftError(e)) => return Err(e.into()),
+            Err(ClientReadError::ForwardToLeader(leader)) => leader,
+        };
+
+        Ok(StrongRead::ForwardTo(self.get_leader(maybe_leader).await?))
+    }
+
+    async fn get_leader(&self, mut maybe_leader: Option<NodeId>) -> IoResult<NodeId> {
+        loop {
+            if let Some(l) = maybe_leader {
+                return Ok(l);
+            }
+
+            let mut metrics = self.raft.metrics();
+            log_err!(metrics.changed().await).ok_or(IoError::Internal)?;
+            maybe_leader = metrics.borrow().current_leader;
+        }
+    }
+
+    async fn do_write(&self, write: LogEntry) -> IoResult<LogEntryResponse> {
+        let req = ClientWriteRequest::new(write);
+        let write = self.raft.client_write(req).await;
+        let (req, maybe_leader) = match write {
+            Ok(resp) => return Ok(resp.data),
+            Err(ClientWriteError::RaftError(e)) => return Err(e.into()),
+            Err(ClientWriteError::ForwardToLeader(req, l)) => (req, l),
+        };
+
+        let leader = self.get_leader(maybe_leader).await?;
+
+        match log_err!(self.transport.request(leader, Request::Write(req)).await)
+            .ok_or(IoError::Internal)?
+        {
+            Response::Write(r) => Ok(r),
+            unexpected => {
+                log::error!("Unexpected response: {:?}", unexpected);
+                Err(IoError::Internal)
+            }
+        }
+    }
+}
+
 fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
     mut receiver: mpsc::Receiver<(Request, oneshot::Sender<anyhow::Result<Response>>)>,
     this: Arc<NetworkStore<T, C>>,
@@ -85,6 +136,7 @@ fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
                         Ok(Response::Raft(RaftResponse::AppendEntries(resp)))
                     }
                     Request::Get(key) => Ok(Response::Get(this.get(&key).await?)),
+                    Request::Write(req) => Ok(Response::Write(this.do_write(req).await?)),
                 }
             }
             .await;
@@ -97,59 +149,31 @@ fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
 #[async_trait::async_trait]
 impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        let mut maybe_leader = match self.raft.client_read().await {
-            Ok(()) => return self.backing_tree.get(key).await,
-            Err(ClientReadError::RaftError(e)) => return Err(e.into()),
-            Err(ClientReadError::ForwardToLeader(leader)) => leader,
-        };
-
-        let leader = loop {
-            if let Some(l) = maybe_leader {
-                break l;
-            }
-
-            let mut metrics = self.raft.metrics();
-            log_err!(metrics.changed().await).ok_or(IoError::Internal)?;
-            maybe_leader = metrics.borrow().current_leader;
-        };
-
-        match log_err!(
-            self.transport
-                .request(leader, Request::Get(key.to_string()))
-                .await
-        )
-        .ok_or(IoError::Internal)?
-        {
-            Response::Get(data) => Ok(data),
-            unexpected => {
-                log::error!("Unexpected response: {:?}", unexpected);
-                Err(IoError::Internal)
+        match self.strong_read().await? {
+            StrongRead::Ok => self.backing_tree.get(key).await,
+            StrongRead::ForwardTo(other) => {
+                match log_err!(
+                    self.transport
+                        .request(other, Request::Get(key.to_string()))
+                        .await
+                )
+                .ok_or(IoError::Internal)?
+                {
+                    Response::Get(data) => Ok(data),
+                    unexpected => {
+                        log::error!("Unexpected response: {:?}", unexpected);
+                        Err(IoError::Internal)
+                    }
+                }
             }
         }
     }
 
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
-        let req =
-            ClientWriteRequest::new(LogEntry::SetKV(key.to_string(), value.map(|v| v.to_vec())));
+        self.do_write(LogEntry::SetKV(key.to_string(), value.map(|v| v.to_vec())))
+            .await?;
 
-        let write = self.raft.client_write(req).await;
-        let (_req, mut leader) = match write {
-            Ok(_) => return Ok(()),
-            Err(ClientWriteError::RaftError(e)) => return Err(e.into()),
-            Err(ClientWriteError::ForwardToLeader(req, l)) => (req, l),
-        };
-
-        while let None = leader {
-            let mut metrics = self.raft.metrics();
-            metrics.changed().await.map_err(|e| {
-                log::error!("{}", e);
-                IoError::Internal
-            })?;
-            leader = metrics.borrow().current_leader;
-        }
-
-        log::info!("{:?}", leader);
-        todo!("ForwardToLeader");
+        Ok(())
     }
 
     async fn compare_and_swap<'p>(

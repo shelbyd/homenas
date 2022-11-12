@@ -53,6 +53,7 @@ enum Message {
 pub enum Request {
     Raft(RaftRequest),
     Get(String),
+    Write(LogEntry),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -66,6 +67,7 @@ pub enum RaftRequest {
 pub enum Response {
     Raft(RaftResponse),
     Get(Option<Vec<u8>>),
+    Write(LogEntryResponse),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -92,7 +94,7 @@ impl Transport {
         });
 
         let listener = Arc::clone(&transport);
-        tokio::task::spawn(async move { listener.listener(listen_on).await.log_err() });
+        tokio::task::spawn(async move { log_err!(listener.listener(listen_on).await) });
 
         for peer_addr in peers {
             let result = async {
@@ -101,7 +103,7 @@ impl Transport {
             }
             .await;
 
-            if let Some((peer, receive)) = result.log_err() {
+            if let Some((peer, receive)) = log_err!(result) {
                 Arc::clone(&transport).new_peer_connected(peer, receive);
             }
         }
@@ -220,6 +222,7 @@ async fn initial_handshake(
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<(Peer, Receive)> {
+    log::info!("Attempting initial handshake with {}", addr);
     let do_connect = async {
         let codec = tokio_serde_cbor::Codec::<Message, Message>::new();
         let mut stream = codec.framed(stream);
