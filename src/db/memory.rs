@@ -26,12 +26,12 @@ impl Tree for MemoryTree {
         Ok(())
     }
 
-    async fn compare_and_swap<'p>(
+    async fn compare_and_swap(
         &self,
         key: &str,
         old: Option<&[u8]>,
-        new: Option<&'p [u8]>,
-    ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
+        new: Option<&[u8]>,
+    ) -> IoResult<Result<(), CompareAndSwapError>> {
         let entry = self.map.entry(key.to_string());
 
         match (&entry, old) {
@@ -42,10 +42,7 @@ impl Tree for MemoryTree {
                     Entry::Occupied(c) => Some(c.get().clone()),
                     Entry::Vacant(_) => None,
                 };
-                return Ok(Err(CompareAndSwapError {
-                    current,
-                    proposed: new,
-                }));
+                return Ok(Err(CompareAndSwapError { current }));
             }
         }
 

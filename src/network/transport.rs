@@ -132,9 +132,8 @@ impl Transport {
 
             let clone = Arc::clone(&self);
             tokio::task::spawn(async move {
-                if let Some((peer, receive)) = initial_handshake(clone.node_id, socket, addr)
-                    .await
-                    .log_err()
+                if let Some((peer, receive)) =
+                    log_err!(initial_handshake(clone.node_id, socket, addr).await)
                 {
                     clone.new_peer_connected(peer, receive);
                 }
@@ -171,9 +170,10 @@ impl Transport {
                             log::error!("{}", e);
                             e.to_string()
                         });
-                        self.send_message(peer_id, Message::Response(id, resp))
-                            .await
-                            .log_err();
+                        log_err!(
+                            self.send_message(peer_id, Message::Response(id, resp))
+                                .await
+                        );
                     }
                     Message::Response(id, resp) => {
                         if let Some((_, responder)) = self.pending_requests.remove(&(peer_id, id)) {

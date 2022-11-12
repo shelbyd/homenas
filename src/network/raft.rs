@@ -10,11 +10,13 @@ pub type HomeNasRaft<T> = Raft<LogEntry, LogEntryResponse, Transport, Storage<T>
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LogEntry {
     SetKV(String, Option<Vec<u8>>),
+    CompareAndSwap(String, Option<Vec<u8>>, Option<Vec<u8>>),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LogEntryResponse {
     SetKV,
+    CompareAndSwap(Result<(), ()>),
 }
 
 pub struct Storage<T: Tree> {
@@ -98,6 +100,13 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for Storage<T> {
                     .set(key, value.as_ref().map(Vec::as_slice))
                     .await?;
                 Ok(LogEntryResponse::SetKV)
+            }
+            LogEntry::CompareAndSwap(key, old, new) => {
+                let result = self
+                    .backing
+                    .compare_and_swap(key, opt_slice(&old), opt_slice(&new))
+                    .await?;
+                Ok(LogEntryResponse::CompareAndSwap(result.map_err(|_| ())))
             }
         }
     }

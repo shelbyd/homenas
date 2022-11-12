@@ -176,13 +176,20 @@ impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
         Ok(())
     }
 
-    async fn compare_and_swap<'p>(
+    async fn compare_and_swap(
         &self,
         key: &str,
         old: Option<&[u8]>,
-        new: Option<&'p [u8]>,
-    ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
-        log::info!("compare_and_swap: {:?}", key);
+        new: Option<&[u8]>,
+    ) -> IoResult<Result<(), CompareAndSwapError>> {
+        self.do_write(LogEntry::CompareAndSwap(
+            key.to_string(),
+            opt_vec(old),
+            opt_vec(new),
+        ))
+        .await?;
+
+        log::warn!("compare_and_swap: {:?}", key);
         self.backing_tree.compare_and_swap(key, old, new).await
     }
 }

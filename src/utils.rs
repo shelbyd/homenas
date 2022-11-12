@@ -1,6 +1,6 @@
 use crate::io::*;
 
-use std::{fmt::Display, io::ErrorKind, path::Path};
+use std::{io::ErrorKind, path::Path};
 
 pub trait FoundResult<T> {
     fn into_found(self) -> Result<Option<T>, IoError>;
@@ -16,24 +16,14 @@ impl<T> FoundResult<T> for Result<T, IoError> {
     }
 }
 
-pub trait ResultExt<T, E> {
-    fn log_err(self) -> Option<T>
-    where
-        E: Display;
+pub fn opt_vec(opt: Option<&[u8]>) -> Option<Vec<u8>> {
+    Some(opt?.to_vec())
 }
 
-impl<T, E> ResultExt<T, E> for Result<T, E> {
-    fn log_err(self) -> Option<T>
-    where
-        E: Display,
-    {
-        match self {
-            Ok(t) => Some(t),
-            Err(e) => {
-                log::error!("{}", e);
-                None
-            }
-        }
+pub fn opt_slice(opt: &Option<Vec<u8>>) -> Option<&[u8]> {
+    match opt {
+        None => None,
+        Some(v) => Some(v.as_slice()),
     }
 }
 

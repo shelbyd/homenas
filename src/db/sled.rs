@@ -28,16 +28,15 @@ impl Tree for Sled {
         Ok(())
     }
 
-    async fn compare_and_swap<'p>(
+    async fn compare_and_swap(
         &self,
         key: &str,
         old: Option<&[u8]>,
-        new: Option<&'p [u8]>,
-    ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
+        new: Option<&[u8]>,
+    ) -> IoResult<Result<(), CompareAndSwapError>> {
         let result = self.sled_tree.compare_and_swap(key, old, new)?;
 
         Ok(result.map_err(|e| CompareAndSwapError {
-            proposed: new,
             current: e.current.map(|iv| iv.to_vec()),
         }))
     }

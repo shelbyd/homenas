@@ -17,18 +17,17 @@ pub trait Tree: Send + Sync {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>>;
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()>;
 
-    async fn compare_and_swap<'p>(
+    async fn compare_and_swap(
         &self,
         key: &str,
         old: Option<&[u8]>,
-        new: Option<&'p [u8]>,
-    ) -> IoResult<Result<(), CompareAndSwapError<'p>>>;
+        new: Option<&[u8]>,
+    ) -> IoResult<Result<(), CompareAndSwapError>>;
 }
 
-#[allow(unused)]
-pub struct CompareAndSwapError<'p> {
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct CompareAndSwapError {
     current: Option<Vec<u8>>,
-    proposed: Option<&'p [u8]>,
 }
 
 #[async_trait::async_trait]
@@ -44,12 +43,12 @@ where
         (**self).set(key, value).await
     }
 
-    async fn compare_and_swap<'p>(
+    async fn compare_and_swap(
         &self,
         key: &str,
         old: Option<&[u8]>,
-        new: Option<&'p [u8]>,
-    ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
+        new: Option<&[u8]>,
+    ) -> IoResult<Result<(), CompareAndSwapError>> {
         (**self).compare_and_swap(key, old, new).await
     }
 }

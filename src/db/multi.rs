@@ -40,12 +40,12 @@ impl<T: Tree> Tree for Multi<T> {
         Ok(())
     }
 
-    async fn compare_and_swap<'p>(
+    async fn compare_and_swap(
         &self,
         key: &str,
         old: Option<&[u8]>,
-        new: Option<&'p [u8]>,
-    ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
+        new: Option<&[u8]>,
+    ) -> IoResult<Result<(), CompareAndSwapError>> {
         // TODO(shelbyd): Maybe a more robust implementation?
         if let Err(e) = self.leader.compare_and_swap(key, old, new).await? {
             return Ok(Err(e));

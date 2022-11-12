@@ -20,12 +20,13 @@ rm -r $DIR_C; mkdir $DIR_C
 sleep 0.1
 
 ./target/debug/homenas start $DIR_A \
-  --listen-on 42000 --peers=127.0.0.1:42001 --peers=127.0.0.1:42002 \
+  --listen-on 42000 \
   --network-state-dir /tmp/.homenas_state/a/network \
   &
 NODE_A=$!
+sleep 0.2
 ./target/debug/homenas start $DIR_B \
-  --listen-on 42001 --peers=127.0.0.1:42000 --peers=127.0.0.1:42002 \
+  --listen-on 42001 --peers=127.0.0.1:42000 \
   --network-state-dir /tmp/.homenas_state/b/network \
   &
 
