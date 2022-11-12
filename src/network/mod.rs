@@ -14,16 +14,17 @@ pub struct NetworkStore<T: Tree + 'static, C> {
     backing_tree: T,
     backing_chunks: C,
     raft: HomeNasRaft<T>,
+    transport: Arc<Transport>,
 }
 
-impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
+impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
     pub async fn create(
         backing_tree: T,
         backing_chunks: C,
         listen_on: u16,
         peers: &[SocketAddr],
         state_dir: impl AsRef<Path>,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Arc<Self>> {
         let state_dir = state_dir.as_ref();
         crate::ensure_dir_exists(state_dir).await?;
         let sled = sled::open(state_dir)?;
@@ -50,8 +51,6 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
         );
         raft.initialize(members).await?;
 
-        handle_raft_requests(raft_request_rx, raft.clone());
-
         {
             let raft = raft.clone();
             tokio::spawn(async move {
@@ -62,35 +61,44 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
             });
         }
 
-        Ok(NetworkStore {
+        let network_store = Arc::new(NetworkStore {
             backing_tree,
             backing_chunks,
             raft,
-        })
+            transport,
+        });
+
+        handle_app_requests(raft_request_rx, network_store.clone());
+
+        Ok(network_store)
     }
 }
 
-fn handle_raft_requests<T: Tree + 'static>(
-    mut receiver: mpsc::Receiver<(RaftRequest, oneshot::Sender<anyhow::Result<RaftResponse>>)>,
-    raft: HomeNasRaft<T>,
+fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
+    mut receiver: mpsc::Receiver<(Request, oneshot::Sender<anyhow::Result<Response>>)>,
+    this: Arc<NetworkStore<T, C>>,
 ) {
     tokio::task::spawn(async move {
         while let Some((req, response_tx)) = receiver.recv().await {
-            log::info!("Internal raft message: {:?}", req);
-            let resp = async {
+            log::debug!("Internal message: {:?}", req);
+            let resp: anyhow::Result<_> = async {
                 match req {
-                    RaftRequest::Vote(vote) => Ok(RaftResponse::Vote(raft.vote(vote).await?)),
-                    RaftRequest::ChangeMembership(members) => {
-                        raft.change_membership(members).await?;
-                        Ok(RaftResponse::ChangeMembership)
+                    Request::Raft(RaftRequest::Vote(vote)) => Ok(Response::Raft(
+                        RaftResponse::Vote(this.raft.vote(vote).await?),
+                    )),
+                    Request::Raft(RaftRequest::ChangeMembership(members)) => {
+                        this.raft.change_membership(members).await?;
+                        Ok(Response::Raft(RaftResponse::ChangeMembership))
                     }
-                    RaftRequest::AppendEntries(req) => {
-                        let resp = raft.append_entries(req).await?;
-                        Ok(RaftResponse::AppendEntries(resp))
+                    Request::Raft(RaftRequest::AppendEntries(req)) => {
+                        let resp = this.raft.append_entries(req).await?;
+                        Ok(Response::Raft(RaftResponse::AppendEntries(resp)))
                     }
+                    Request::Get(key) => Ok(Response::Get(this.get(&key).await?)),
                 }
-            }.await;
-            log::info!("Internal raft response: {:?}", resp);
+            }
+            .await;
+            log::debug!("Internal response: {:?}", resp);
             response_tx.send(resp).ok();
         }
     });
@@ -99,23 +107,38 @@ fn handle_raft_requests<T: Tree + 'static>(
 #[async_trait::async_trait]
 impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        let mut leader = match self.raft.client_read().await {
+        let mut maybe_leader = match self.raft.client_read().await {
             Ok(()) => return self.backing_tree.get(key).await,
             Err(ClientReadError::RaftError(e)) => return Err(e.into()),
             Err(ClientReadError::ForwardToLeader(leader)) => leader,
         };
 
-        while let None = leader {
+        let leader = loop {
+            if let Some(l) = maybe_leader {
+                break l;
+            }
+
             let mut metrics = self.raft.metrics();
             metrics.changed().await.map_err(|e| {
                 log::error!("{}", e);
                 IoError::Internal
             })?;
-            leader = metrics.borrow().current_leader;
-        }
+            maybe_leader = metrics.borrow().current_leader;
+        };
 
-        log::info!("{:?}", leader);
-        todo!("ForwardToLeader");
+        match self
+            .transport
+            .request(leader, Request::Get(key.to_string()))
+            .await
+            .log_err()
+            .ok_or(IoError::Internal)?
+        {
+            Response::Get(data) => Ok(data),
+            unexpected => {
+                log::error!("Unexpected response: {:?}", unexpected);
+                Err(IoError::Internal)
+            }
+        }
     }
 
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {

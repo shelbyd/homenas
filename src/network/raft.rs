@@ -5,7 +5,7 @@ use async_raft::{async_trait::async_trait, storage::*};
 use serde::*;
 use tokio::fs::*;
 
-pub type HomeNasRaft<T> = Raft<LogEntry, Response, Transport, Storage<T>>;
+pub type HomeNasRaft<T> = Raft<LogEntry, LogEntryResponse, Transport, Storage<T>>;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LogEntry {
@@ -13,7 +13,7 @@ pub enum LogEntry {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub enum Response {
+pub enum LogEntryResponse {
     SetKV,
 }
 
@@ -25,10 +25,16 @@ pub struct Storage<T: Tree> {
 
 impl AppData for LogEntry {}
 
-impl AppDataResponse for Response {}
+impl AppDataResponse for LogEntryResponse {}
+
+impl<T: Tree> Storage<T> {
+    fn log_key(&self, index: u64) -> String {
+        format!("logs/{:020}", index)
+    }
+}
 
 #[async_trait]
-impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
+impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for Storage<T> {
     type Snapshot = File;
     type ShutdownError = IoError;
 
@@ -54,9 +60,11 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
         Ok(())
     }
 
-    async fn get_log_entries(&self, _start: u64, _end: u64) -> Result<Vec<Entry<LogEntry>>> {
-        log::error!("----- UNIMPLEMENTED -----: get_log_entries");
-        Err(IoError::Unimplemented.into())
+    async fn get_log_entries(&self, start: u64, end: u64) -> Result<Vec<Entry<LogEntry>>> {
+        self.sled
+            .range(self.log_key(start)..self.log_key(end))
+            .map(|r| crate::from_slice(&(r?.1)))
+            .collect()
     }
 
     async fn delete_logs_from(&self, _start: u64, _end: Option<u64>) -> Result<()> {
@@ -66,33 +74,39 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
 
     async fn append_entry_to_log(&self, entry: &Entry<LogEntry>) -> Result<()> {
         self.sled
-            .insert(format!("log/{}", entry.index), crate::to_vec(entry)?)?;
+            .insert(self.log_key(entry.index), crate::to_vec(entry)?)?;
         Ok(())
     }
 
-    async fn replicate_to_log(&self, _entries: &[Entry<LogEntry>]) -> Result<()> {
-        log::error!("----- UNIMPLEMENTED -----: replicate_to_log");
-        Err(IoError::Unimplemented.into())
+    async fn replicate_to_log(&self, entries: &[Entry<LogEntry>]) -> Result<()> {
+        for entry in entries {
+            self.sled
+                .insert(self.log_key(entry.index), crate::to_vec(entry)?)?;
+        }
+
+        Ok(())
     }
 
     async fn apply_entry_to_state_machine(
         &self,
         _index: &u64,
         entry: &LogEntry,
-    ) -> Result<Response> {
+    ) -> Result<LogEntryResponse> {
         match entry {
             LogEntry::SetKV(key, value) => {
                 self.backing
                     .set(key, value.as_ref().map(Vec::as_slice))
                     .await?;
-                Ok(Response::SetKV)
+                Ok(LogEntryResponse::SetKV)
             }
         }
     }
 
-    async fn replicate_to_state_machine(&self, _entries: &[(&u64, &LogEntry)]) -> Result<()> {
-        log::error!("----- UNIMPLEMENTED -----: replicate_to_state_machine");
-        Err(IoError::Unimplemented.into())
+    async fn replicate_to_state_machine(&self, entries: &[(&u64, &LogEntry)]) -> Result<()> {
+        for (index, entry) in entries {
+            self.apply_entry_to_state_machine(index, entry).await?;
+        }
+        Ok(())
     }
 
     async fn do_log_compaction(&self) -> Result<CurrentSnapshotData<File>> {

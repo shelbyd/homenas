@@ -56,19 +56,17 @@ impl StartCommand {
             )),
         };
 
-        let store = Arc::new(
-            NetworkStore::create(
-                Arc::new(tree),
-                chunk_store,
-                self.listen_on,
-                &self.peers,
-                self.network_state_dir
-                    .as_ref()
-                    .map(PathBuf::as_path)
-                    .unwrap_or(PROJECT_DIRS.data_dir()),
-            )
-            .await?,
-        );
+        let store = NetworkStore::create(
+            Arc::new(tree),
+            chunk_store,
+            self.listen_on,
+            &self.peers,
+            self.network_state_dir
+                .as_ref()
+                .map(PathBuf::as_path)
+                .unwrap_or(PROJECT_DIRS.data_dir()),
+        )
+        .await?;
 
         let chunk_store = Arc::clone(&store);
         let chunk_store = Striping::new(chunk_store, Arc::clone(&store));

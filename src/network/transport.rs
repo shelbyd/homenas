@@ -23,8 +23,8 @@ type Receive = SplitStream<MessageStream>;
 
 type RequestId = u64;
 
-type RaftConnectMessage = (RaftRequest, oneshot::Sender<Result<RaftResponse>>);
-type RaftSender = mpsc::Sender<RaftConnectMessage>;
+type RaftConnectMessage = (Request, oneshot::Sender<Result<Response>>);
+type AppSender = mpsc::Sender<RaftConnectMessage>;
 
 type StringResult<T> = std::result::Result<T, String>;
 
@@ -32,7 +32,7 @@ pub struct Transport {
     peers: DashMap<NodeId, Peer>,
     node_id: NodeId,
     pending_requests: DashMap<(NodeId, RequestId), oneshot::Sender<StringResult<Response>>>,
-    raft_requests: RaftSender,
+    app_requests: AppSender,
 }
 
 struct Peer {
@@ -52,6 +52,7 @@ enum Message {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
     Raft(RaftRequest),
+    Get(String),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -64,6 +65,7 @@ pub enum RaftRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Response {
     Raft(RaftResponse),
+    Get(Option<Vec<u8>>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -80,13 +82,13 @@ impl Transport {
         node_id: NodeId,
         listen_on: u16,
         peers: &[SocketAddr],
-        raft_requests: RaftSender,
+        app_requests: AppSender,
     ) -> Result<Arc<Self>> {
         let transport = Arc::new(Transport {
             node_id,
             peers: DashMap::default(),
             pending_requests: DashMap::default(),
-            raft_requests,
+            app_requests,
         });
 
         let listener = Arc::clone(&transport);
@@ -146,9 +148,11 @@ impl Transport {
         self.peers.insert(peer.node_id, peer);
 
         tokio::task::spawn(async move {
-            self.send_raft_request(RaftRequest::ChangeMembership(self.raft_members()))
-                .await
-                .log_err();
+            self.send_application_request(Request::Raft(RaftRequest::ChangeMembership(
+                self.raft_members(),
+            )))
+            .await
+            .log_err();
 
             loop {
                 let message = match receive.try_next().await.log_err() {
@@ -161,7 +165,7 @@ impl Transport {
                         log::warn!("Got handshake message during normal operation");
                     }
                     Message::Request(id, req) => {
-                        let resp = self.handle_request(req).await.map_err(|e| {
+                        let resp = self.send_application_request(req).await.map_err(|e| {
                             log::error!("{}", e);
                             e.to_string()
                         });
@@ -203,15 +207,9 @@ impl Transport {
         Ok(())
     }
 
-    async fn handle_request(&self, request: Request) -> Result<Response> {
-        match request {
-            Request::Raft(req) => self.send_raft_request(req).await.map(Response::Raft),
-        }
-    }
-
-    async fn send_raft_request(&self, request: RaftRequest) -> Result<RaftResponse> {
+    async fn send_application_request(&self, request: Request) -> Result<Response> {
         let (tx, rx) = oneshot::channel();
-        self.raft_requests.send((request, tx)).await?;
+        self.app_requests.send((request, tx)).await?;
         let resp = rx.await?;
         resp
     }
@@ -271,7 +269,7 @@ impl RaftNetwork<LogEntry> for Transport {
             .request(node_id, Request::Raft(RaftRequest::AppendEntries(request)))
             .await?;
 
-        match dbg!(resp) {
+        match resp {
             Response::Raft(RaftResponse::AppendEntries(r)) => Ok(r),
             unexpected => {
                 anyhow::bail!("Unexpected response: {:?}", unexpected);
@@ -293,7 +291,7 @@ impl RaftNetwork<LogEntry> for Transport {
             .request(node_id, Request::Raft(RaftRequest::Vote(req)))
             .await?;
 
-        match dbg!(resp) {
+        match resp {
             Response::Raft(RaftResponse::Vote(r)) => Ok(r),
             unexpected => {
                 anyhow::bail!("Unexpected response: {:?}", unexpected);
