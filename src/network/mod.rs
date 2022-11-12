@@ -1,7 +1,8 @@
-use crate::{chunk_store::*, db::*, io::*};
+use crate::{chunk_store::*, db::*, io::*, utils::*};
 
 use async_raft::{error::*, raft::*, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
+use tokio::sync::{mpsc, oneshot};
 
 mod raft;
 use raft::*;
@@ -32,13 +33,15 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
             .map(crate::from_slice)
             .unwrap_or(Ok(rand::random()))?;
 
-        let network = Transport::create(node_id, listen_on, peers).await?;
-        let members = network.raft_members();
+        let (raft_request_tx, raft_request_rx) = mpsc::channel(32);
+
+        let transport = Transport::create(node_id, listen_on, peers, raft_request_tx).await?;
+        let members = transport.raft_members();
 
         let raft = Raft::new(
             node_id,
             Arc::new(Config::build("HomeNAS".to_string()).validate()?),
-            network,
+            Arc::clone(&transport),
             Arc::new(raft::Storage {
                 node_id,
                 sled,
@@ -47,12 +50,45 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
         );
         raft.initialize(members).await?;
 
+        handle_raft_requests(raft_request_rx, raft.clone());
+
+        {
+            let raft = raft.clone();
+            tokio::spawn(async move {
+                loop {
+                    log::info!("Raft metrics: {:?}", raft.metrics().borrow());
+                    while let Some(()) = raft.metrics().changed().await.log_err() {}
+                }
+            });
+        }
+
         Ok(NetworkStore {
             backing_tree,
             backing_chunks,
             raft,
         })
     }
+}
+
+fn handle_raft_requests<T: Tree + 'static>(
+    mut receiver: mpsc::Receiver<(RaftRequest, oneshot::Sender<RaftResponse>)>,
+    raft: HomeNasRaft<T>,
+) {
+    tokio::task::spawn(async move {
+        while let Some((req, response_tx)) = receiver.recv().await {
+            match req {
+                RaftRequest::Vote(vote) => {
+                    response_tx
+                        .send(RaftResponse::Vote(raft.vote(vote).await.unwrap()))
+                        .ok();
+                }
+                RaftRequest::ChangeMembership(members) => {
+                    raft.change_membership(members).await.unwrap();
+                    response_tx.send(RaftResponse::ChangeMembership).ok();
+                }
+            }
+        }
+    });
 }
 
 #[async_trait::async_trait]
