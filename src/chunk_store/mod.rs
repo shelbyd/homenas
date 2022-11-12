@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, ops::Deref};
+use std::ops::Deref;
+
+pub use std::collections::HashSet;
 
 use crate::{db::*, io::*};
 

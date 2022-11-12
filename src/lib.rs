@@ -9,6 +9,10 @@ mod fs;
 mod io;
 pub mod logging;
 pub mod operating_system;
+
+mod network;
+pub use network::*;
+
 mod utils;
 pub use utils::*;
 

@@ -1,7 +1,4 @@
-use std::{
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use super::*;
@@ -15,21 +12,9 @@ impl FsChunkStore {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
 
-        let id_path = path.join("directory-id");
-        std::fs::create_dir_all(id_path.parent().unwrap())?;
-        let id = match std::fs::read(&id_path) {
-            Ok(bytes) => serde_cbor::from_slice(&bytes)?,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                let id = rand::random();
-                std::fs::write(&id_path, &serde_cbor::to_vec(&id)?)?;
-                id
-            }
-            Err(e) => return Err(anyhow::anyhow!(e)),
-        };
-
         Ok(FsChunkStore {
+            id: crate::obtain_id(path.join("directory_id"))?,
             path: path.to_path_buf(),
-            id,
         })
     }
 
