@@ -1,6 +1,6 @@
 use std::{collections::HashSet, ops::Deref};
 
-use crate::{io::*, object_store::*};
+use crate::{db::*, io::*, object_store::*};
 
 #[cfg(test)]
 use crate::stores::*;

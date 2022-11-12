@@ -29,7 +29,7 @@ pub struct StartCommand {
 
 impl StartCommand {
     pub async fn run(&self, _opts: &crate::commands::Options) -> anyhow::Result<()> {
-        let _tree: Box<dyn Tree> = match &self.backing_dir[..] {
+        let tree: Box<dyn Tree> = match &self.backing_dir[..] {
             [] => {
                 log::warn!("No backing-dir provided, only persisting to memory");
                 Box::new(crate::db::MemoryTree::default())
@@ -43,6 +43,7 @@ impl StartCommand {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
         };
+        let tree = Arc::new(tree);
 
         let object_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
             [] => Box::new(Memory::default()),
@@ -54,6 +55,9 @@ impl StartCommand {
             )),
         };
 
+        let object_store = Network::new(object_store, self.listen_on, &self.peers).await?;
+        let object_store = Arc::new(object_store);
+
         let chunk_store: Box<dyn ChunkStore> = match &self.backing_dir[..] {
             [] => todo!(),
             [single] => Box::new(FsChunkStore::new(single)?),
@@ -63,12 +67,8 @@ impl StartCommand {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
         };
-
-        let object_store = Network::new(object_store, self.listen_on, &self.peers).await?;
-        let object_store = Arc::new(object_store);
-
         let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
-        let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
+        let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&tree));
 
         let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
 

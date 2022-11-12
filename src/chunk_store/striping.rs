@@ -6,6 +6,7 @@ use serde::*;
 use std::collections::{HashMap, HashSet};
 
 use super::*;
+use crate::object_store::typed::CborTypedExt;
 
 type ChunkId = String;
 type StripeId = String;
@@ -54,7 +55,7 @@ impl<C: ChunkStore, O: ObjectStore> Striping<C, O> {
         _id: &str,
         mut f: impl FnMut(&mut StripesMeta) -> R + Send,
     ) -> IoResult<R> {
-        update_typed(&self.object, &self.stripe_key(), |meta| {
+        crate::object_store::update_typed(&self.object, &self.stripe_key(), |meta| {
             let mut meta = meta.unwrap_or_default();
 
             let r = f(&mut meta);
