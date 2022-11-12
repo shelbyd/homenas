@@ -649,6 +649,9 @@ dependencies = [
  "test-log",
  "thiserror",
  "tokio",
+ "tokio-serde",
+ "tokio-serde-cbor",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1371,6 +1374,44 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-serde"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "911a61637386b789af998ee23f50aa30d5fd7edcec8d6d3dedae5e5815205466"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project",
+]
+
+[[package]]
+name = "tokio-serde-cbor"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82ab9434d1ea23a461c62e4b803cfdddb4453c6e9a4f3adeebb8e3f54c529506"
+dependencies = [
+ "bytes",
+ "serde",
+ "serde_cbor",
+ "tokio-util",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bb2e075f03b3d66d8d8785356224ba688d2906a371015e225beeb65ca92c740"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

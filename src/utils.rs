@@ -1,17 +1,38 @@
 use crate::io::*;
 
-use std::{io::ErrorKind, path::Path};
+use std::{fmt::Display, io::ErrorKind, path::Path};
 
-pub trait ResultExt<T> {
+pub trait FoundResult<T> {
     fn into_found(self) -> Result<Option<T>, IoError>;
 }
 
-impl<T> ResultExt<T> for Result<T, IoError> {
+impl<T> FoundResult<T> for Result<T, IoError> {
     fn into_found(self) -> Result<Option<T>, IoError> {
         match self {
             Ok(t) => Ok(Some(t)),
             Err(IoError::NotFound) => Ok(None),
             Err(e) => Err(e),
+        }
+    }
+}
+
+pub trait ResultExt<T, E> {
+    fn log_err(self) -> Option<T>
+    where
+        E: Display;
+}
+
+impl<T, E> ResultExt<T, E> for Result<T, E> {
+    fn log_err(self) -> Option<T>
+    where
+        E: Display,
+    {
+        match self {
+            Ok(t) => Some(t),
+            Err(e) => {
+                log::error!("{}", e);
+                None
+            }
         }
     }
 }
@@ -37,4 +58,9 @@ pub fn from_slice<T: serde::de::DeserializeOwned>(vec: impl AsRef<[u8]>) -> anyh
 
 pub fn to_vec<T: serde::Serialize>(t: &T) -> anyhow::Result<Vec<u8>> {
     Ok(serde_cbor::to_vec(t)?)
+}
+
+pub async fn ensure_dir_exists(path: impl AsRef<Path>) -> IoResult<()> {
+    tokio::fs::create_dir_all(path).await?;
+    Ok(())
 }

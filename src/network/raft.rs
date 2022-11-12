@@ -5,7 +5,7 @@ use async_raft::{async_trait::async_trait, storage::*};
 use serde::*;
 use tokio::fs::*;
 
-pub type HomeNasRaft<T> = Raft<LogEntry, Response, Network, Storage<T>>;
+pub type HomeNasRaft<T> = Raft<LogEntry, Response, Transport, Storage<T>>;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LogEntry {
@@ -17,50 +17,15 @@ pub enum Response {
     SetKV,
 }
 
-pub struct Network {}
-
 pub struct Storage<T: Tree> {
     pub node_id: u64,
     pub sled: sled::Db,
     pub backing: T,
 }
 
-impl Network {
-    pub async fn discover(&mut self, peers: &[SocketAddr]) -> anyhow::Result<HashSet<NodeId>> {
-        log::warn!("TODO(shelbyd): Implement network discovery, or at least use args");
-        Ok(HashSet::default())
-    }
-}
-
 impl AppData for LogEntry {}
 
 impl AppDataResponse for Response {}
-
-#[async_trait]
-impl RaftNetwork<LogEntry> for Network {
-    async fn append_entries(
-        &self,
-        _: u64,
-        _: AppendEntriesRequest<LogEntry>,
-    ) -> Result<AppendEntriesResponse> {
-        log::error!("append_entries");
-        Err(IoError::Unimplemented.into())
-    }
-
-    async fn install_snapshot(
-        &self,
-        _node_id: u64,
-        _req: InstallSnapshotRequest,
-    ) -> Result<InstallSnapshotResponse> {
-        log::error!("install_snapshot");
-        Err(IoError::Unimplemented.into())
-    }
-
-    async fn vote(&self, _node_id: u64, _req: VoteRequest) -> Result<VoteResponse> {
-        log::error!("vote");
-        Err(IoError::Unimplemented.into())
-    }
-}
 
 #[async_trait]
 impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {

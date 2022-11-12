@@ -6,6 +6,9 @@ use std::{net::SocketAddr, path::Path, sync::Arc};
 mod raft;
 use raft::*;
 
+mod transport;
+pub use transport::*;
+
 pub struct NetworkStore<T: Tree + 'static, C> {
     backing_tree: T,
     backing_chunks: C,
@@ -16,11 +19,12 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
     pub async fn create(
         backing_tree: T,
         backing_chunks: C,
-        _listen_on: u16,
+        listen_on: u16,
         peers: &[SocketAddr],
         state_dir: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
         let state_dir = state_dir.as_ref();
+        crate::ensure_dir_exists(state_dir).await?;
         let sled = sled::open(state_dir)?;
 
         let node_id = sled
@@ -28,14 +32,13 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
             .map(crate::from_slice)
             .unwrap_or(Ok(rand::random()))?;
 
-        let mut network = raft::Network {};
-        let mut members = network.discover(peers).await?;
-        members.insert(node_id);
+        let network = Transport::create(node_id, listen_on, peers).await?;
+        let members = network.raft_members();
 
         let raft = Raft::new(
             node_id,
             Arc::new(Config::build("HomeNAS".to_string()).validate()?),
-            Arc::new(network),
+            network,
             Arc::new(raft::Storage {
                 node_id,
                 sled,

@@ -26,7 +26,7 @@ sleep 0.1
 NODE_A=$!
 ./target/debug/homenas start $DIR_B \
   --listen-on 42001 --peers=127.0.0.1:42000 --peers=127.0.0.1:42002 \
-  --network-state-dir /tmp/.homenas_state/a/network \
+  --network-state-dir /tmp/.homenas_state/b/network \
   &
 
 sleep 1
@@ -40,7 +40,9 @@ sleep 0.5
 
 # DIR_C starts after the file has already been written.
 ./target/debug/homenas start $DIR_C \
-  --listen-on 42002 --peers=127.0.0.1:42000 --peers=127.0.0.1:42001 &
+  --listen-on 42002 --peers=127.0.0.1:42000 --peers=127.0.0.1:42001 \
+  --network-state-dir /tmp/.homenas_state/c/network \
+  &
 
 sleep 0.5
 
