@@ -2,9 +2,6 @@ use std::{collections::HashSet, ops::Deref};
 
 use crate::{db::*, io::*, object_store::*};
 
-#[cfg(test)]
-use crate::stores::*;
-
 mod file_system;
 pub use file_system::*;
 

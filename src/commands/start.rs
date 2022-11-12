@@ -67,7 +67,7 @@ impl StartCommand {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
         };
-        let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
+        let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&tree));
         let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&tree));
 
         let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store));
