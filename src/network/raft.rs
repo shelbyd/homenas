@@ -33,7 +33,7 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
     type ShutdownError = IoError;
 
     async fn get_membership_config(&self) -> Result<MembershipConfig> {
-        log::error!("get_membership_config");
+        log::error!("----- UNIMPLEMENTED -----: get_membership_config");
         Err(IoError::Unimplemented.into())
     }
 
@@ -55,12 +55,12 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
     }
 
     async fn get_log_entries(&self, _start: u64, _end: u64) -> Result<Vec<Entry<LogEntry>>> {
-        log::error!("get_log_entries");
+        log::error!("----- UNIMPLEMENTED -----: get_log_entries");
         Err(IoError::Unimplemented.into())
     }
 
     async fn delete_logs_from(&self, _start: u64, _end: Option<u64>) -> Result<()> {
-        log::error!("delete_logs_from");
+        log::error!("----- UNIMPLEMENTED -----: delete_logs_from");
         Err(IoError::Unimplemented.into())
     }
 
@@ -71,7 +71,7 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
     }
 
     async fn replicate_to_log(&self, _entries: &[Entry<LogEntry>]) -> Result<()> {
-        log::error!("replicate_to_log");
+        log::error!("----- UNIMPLEMENTED -----: replicate_to_log");
         Err(IoError::Unimplemented.into())
     }
 
@@ -91,17 +91,17 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
     }
 
     async fn replicate_to_state_machine(&self, _entries: &[(&u64, &LogEntry)]) -> Result<()> {
-        log::error!("replicate_to_state_machine");
+        log::error!("----- UNIMPLEMENTED -----: replicate_to_state_machine");
         Err(IoError::Unimplemented.into())
     }
 
     async fn do_log_compaction(&self) -> Result<CurrentSnapshotData<File>> {
-        log::error!("do_log_compaction");
+        log::error!("----- UNIMPLEMENTED -----: do_log_compaction");
         Err(IoError::Unimplemented.into())
     }
 
     async fn create_snapshot(&self) -> Result<(String, Box<File>)> {
-        log::error!("create_snapshot");
+        log::error!("----- UNIMPLEMENTED -----: create_snapshot");
         Err(IoError::Unimplemented.into())
     }
 
@@ -113,7 +113,7 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
         _id: String,
         _snapshot: Box<File>,
     ) -> Result<()> {
-        log::error!("finalize_snapshot_installation");
+        log::error!("----- UNIMPLEMENTED -----: finalize_snapshot_installation");
         Err(IoError::Unimplemented.into())
     }
 

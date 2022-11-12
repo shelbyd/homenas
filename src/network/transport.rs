@@ -23,7 +23,7 @@ type Receive = SplitStream<MessageStream>;
 
 type RequestId = u64;
 
-type RaftConnectMessage = (RaftRequest, oneshot::Sender<RaftResponse>);
+type RaftConnectMessage = (RaftRequest, oneshot::Sender<Result<RaftResponse>>);
 type RaftSender = mpsc::Sender<RaftConnectMessage>;
 
 type StringResult<T> = std::result::Result<T, String>;
@@ -58,6 +58,7 @@ pub enum Request {
 pub enum RaftRequest {
     Vote(async_raft::raft::VoteRequest),
     ChangeMembership(HashSet<NodeId>),
+    AppendEntries(AppendEntriesRequest<LogEntry>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -69,6 +70,7 @@ pub enum Response {
 pub enum RaftResponse {
     Vote(async_raft::raft::VoteResponse),
     ChangeMembership,
+    AppendEntries(AppendEntriesResponse),
 }
 
 enum Never {}
@@ -211,7 +213,7 @@ impl Transport {
         let (tx, rx) = oneshot::channel();
         self.raft_requests.send((request, tx)).await?;
         let resp = rx.await?;
-        Ok(resp)
+        resp
     }
 }
 
@@ -262,11 +264,19 @@ async fn initial_handshake(
 impl RaftNetwork<LogEntry> for Transport {
     async fn append_entries(
         &self,
-        _: u64,
-        _: AppendEntriesRequest<LogEntry>,
+        node_id: u64,
+        request: AppendEntriesRequest<LogEntry>,
     ) -> Result<AppendEntriesResponse> {
-        todo!("append_entries");
-        Err(IoError::Unimplemented.into())
+        let resp = self
+            .request(node_id, Request::Raft(RaftRequest::AppendEntries(request)))
+            .await?;
+
+        match dbg!(resp) {
+            Response::Raft(RaftResponse::AppendEntries(r)) => Ok(r),
+            unexpected => {
+                anyhow::bail!("Unexpected response: {:?}", unexpected);
+            }
+        }
     }
 
     async fn install_snapshot(

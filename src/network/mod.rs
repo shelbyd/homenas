@@ -71,22 +71,27 @@ impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
 }
 
 fn handle_raft_requests<T: Tree + 'static>(
-    mut receiver: mpsc::Receiver<(RaftRequest, oneshot::Sender<RaftResponse>)>,
+    mut receiver: mpsc::Receiver<(RaftRequest, oneshot::Sender<anyhow::Result<RaftResponse>>)>,
     raft: HomeNasRaft<T>,
 ) {
     tokio::task::spawn(async move {
         while let Some((req, response_tx)) = receiver.recv().await {
-            match req {
-                RaftRequest::Vote(vote) => {
-                    response_tx
-                        .send(RaftResponse::Vote(raft.vote(vote).await.unwrap()))
-                        .ok();
+            log::info!("Internal raft message: {:?}", req);
+            let resp = async {
+                match req {
+                    RaftRequest::Vote(vote) => Ok(RaftResponse::Vote(raft.vote(vote).await?)),
+                    RaftRequest::ChangeMembership(members) => {
+                        raft.change_membership(members).await?;
+                        Ok(RaftResponse::ChangeMembership)
+                    }
+                    RaftRequest::AppendEntries(req) => {
+                        let resp = raft.append_entries(req).await?;
+                        Ok(RaftResponse::AppendEntries(resp))
+                    }
                 }
-                RaftRequest::ChangeMembership(members) => {
-                    raft.change_membership(members).await.unwrap();
-                    response_tx.send(RaftResponse::ChangeMembership).ok();
-                }
-            }
+            }.await;
+            log::info!("Internal raft response: {:?}", resp);
+            response_tx.send(resp).ok();
         }
     });
 }
