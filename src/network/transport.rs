@@ -152,10 +152,10 @@ impl Transport {
                 self.raft_members(),
             )))
             .await
-            .log_err();
+            .ok();
 
             loop {
-                let message = match receive.try_next().await.log_err() {
+                let message = match log_err!(receive.try_next().await) {
                     Some(Some(m)) => m,
                     _ => break,
                 };

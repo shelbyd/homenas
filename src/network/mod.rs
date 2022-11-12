@@ -1,4 +1,4 @@
-use crate::{chunk_store::*, db::*, io::*, utils::*};
+use crate::{chunk_store::*, db::*, io::*, log_err, utils::*};
 
 use async_raft::{error::*, raft::*, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
@@ -50,16 +50,6 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
             }),
         );
         raft.initialize(members).await?;
-
-        {
-            let raft = raft.clone();
-            tokio::spawn(async move {
-                loop {
-                    log::info!("Raft metrics: {:?}", raft.metrics().borrow());
-                    while let Some(()) = raft.metrics().changed().await.log_err() {}
-                }
-            });
-        }
 
         let network_store = Arc::new(NetworkStore {
             backing_tree,
@@ -119,19 +109,16 @@ impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
             }
 
             let mut metrics = self.raft.metrics();
-            metrics.changed().await.map_err(|e| {
-                log::error!("{}", e);
-                IoError::Internal
-            })?;
+            log_err!(metrics.changed().await).ok_or(IoError::Internal)?;
             maybe_leader = metrics.borrow().current_leader;
         };
 
-        match self
-            .transport
-            .request(leader, Request::Get(key.to_string()))
-            .await
-            .log_err()
-            .ok_or(IoError::Internal)?
+        match log_err!(
+            self.transport
+                .request(leader, Request::Get(key.to_string()))
+                .await
+        )
+        .ok_or(IoError::Internal)?
         {
             Response::Get(data) => Ok(data),
             unexpected => {

@@ -64,3 +64,16 @@ pub async fn ensure_dir_exists(path: impl AsRef<Path>) -> IoResult<()> {
     tokio::fs::create_dir_all(path).await?;
     Ok(())
 }
+
+#[macro_export]
+macro_rules! log_err {
+    ($expr:expr) => {{
+        match $expr {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::error!("{}", e);
+                None
+            }
+        }
+    }};
+}
