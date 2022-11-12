@@ -4,7 +4,6 @@ use structopt::*;
 use crate::{chunk_store::*, db::*};
 
 #[derive(StructOpt, Debug)]
-#[allow(dead_code)] // TODO: Remove.
 pub struct StartCommand {
     /// Local port to listen for peer connections.
     #[structopt(long, default_value = "36686")]

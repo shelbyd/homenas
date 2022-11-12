@@ -46,6 +46,7 @@ impl<T: Tree> Tree for Multi<T> {
         old: Option<&[u8]>,
         new: Option<&'p [u8]>,
     ) -> IoResult<Result<(), CompareAndSwapError<'p>>> {
+        // TODO(shelbyd): Maybe a more robust implementation?
         if let Err(e) = self.leader.compare_and_swap(key, old, new).await? {
             return Ok(Err(e));
         }
