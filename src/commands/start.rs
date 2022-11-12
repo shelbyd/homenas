@@ -42,6 +42,7 @@ impl StartCommand {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
         };
+        let tree = NetworkTree::create(tree, self.listen_on, &self.peers)?;
         let tree = Arc::new(tree);
 
         let chunk_store: Box<dyn ChunkStore> = match &self.backing_dir[..] {

@@ -6,6 +6,9 @@ pub use memory::*;
 mod multi;
 pub use multi::*;
 
+mod network;
+pub use network::*;
+
 mod sled;
 pub use self::sled::*;
 
