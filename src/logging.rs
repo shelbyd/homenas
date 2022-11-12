@@ -6,7 +6,7 @@ pub fn init() -> anyhow::Result<()> {
     let file_spec = FileSpec::default().directory(PROJECT_DIRS.data_dir().join("logs"));
 
     Logger::try_with_str("info")?
-        .log_to_file(file_spec.clone())
+        .log_to_file(file_spec)
         .format_for_files(file_format)
         .print_message()
         .rotate(

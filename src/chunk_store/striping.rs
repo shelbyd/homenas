@@ -140,7 +140,7 @@ impl StripesMeta {
         // TODO(shelbyd): Use stripes_mut.
         let update_parity = |p: &mut Vec<u8>| {
             p.resize(core::cmp::max(p.len(), chunk.len()), 0);
-            *p = xor(&p, chunk);
+            *p = xor(p, chunk);
         };
 
         if locations.tail.is_empty() {
@@ -300,7 +300,7 @@ impl Stripe {
 
             let chunk = chunks
                 .remove(chunk_id.as_str())
-                .expect(&format!("missing required chunk {}", chunk_id));
+                .unwrap_or_else(|| panic!("missing required chunk {}", chunk_id));
 
             let chunk = chunk.as_ref();
             result.resize(core::cmp::max(result.len(), chunk.len()), 0);
@@ -311,7 +311,7 @@ impl Stripe {
 
     fn drop(&mut self, id: &str, chunk: &[u8]) {
         assert!(self.chunks.remove(id), "stripe dropped missing id");
-        self.parity = xor(&self.parity, &chunk);
+        self.parity = xor(&self.parity, chunk);
     }
 }
 
@@ -474,10 +474,7 @@ mod tests {
 
                 let locations = nonempty![Memory(42), Memory(43), Memory(44)];
 
-                assert_eq!(
-                    stripes.set("foo", &[0, 1, 2, 3], locations.clone()).0,
-                    Memory(42),
-                );
+                assert_eq!(stripes.set("foo", &[0, 1, 2, 3], locations).0, Memory(42),);
             }
 
             #[test]
@@ -487,7 +484,7 @@ mod tests {
                 let locations = nonempty![Memory(42), Memory(43), Memory(44)];
 
                 let first = stripes.set("foo", &[0], locations.clone()).0;
-                let second = stripes.set("bar", &[1], locations.clone()).0;
+                let second = stripes.set("bar", &[1], locations).0;
 
                 assert_ne!(first, second);
             }
@@ -499,7 +496,7 @@ mod tests {
                 let locations = nonempty![Memory(42), Memory(43), Memory(44), Memory(45)];
 
                 stripes.set("foo", &[1], locations.clone());
-                stripes.set("bar", &[2], locations.clone());
+                stripes.set("bar", &[2], locations);
 
                 assert_eq!(stripes.chunks_needed("foo"), Ok(hashset! { "bar" }));
                 assert_eq!(
@@ -516,7 +513,7 @@ mod tests {
 
                 stripes.set("foo", &[0, 1, 2, 3], locations.clone());
                 assert_eq!(
-                    stripes.set("bar", &[4, 5, 6, 7], locations.clone()),
+                    stripes.set("bar", &[4, 5, 6, 7], locations),
                     (Memory(43), Some((Memory(44), vec![4, 4, 4, 4],))),
                 );
             }
@@ -530,7 +527,7 @@ mod tests {
                 stripes.set("foo", &[0, 1, 2, 3], locations.clone());
                 stripes.set("bar", &[4, 5, 6, 7], locations.clone());
 
-                stripes.set("baz", &[8, 9, 10, 11], locations.clone());
+                stripes.set("baz", &[8, 9, 10, 11], locations);
                 assert_eq!(stripes.chunks_needed("baz"), Ok(hashset! {}));
             }
 
@@ -541,7 +538,7 @@ mod tests {
                 let locations = nonempty![Memory(42), Memory(43), Memory(44)];
 
                 stripes.set("foo", &[0, 1, 2, 3], locations.clone());
-                stripes.set("bar", &[4, 5, 6, 7], locations.clone());
+                stripes.set("bar", &[4, 5, 6, 7], locations);
 
                 let needed_for_foo = stripes.chunks_needed("foo").unwrap();
 
@@ -561,7 +558,7 @@ mod tests {
                 let bar = &[4, 5, 6, 7];
 
                 stripes.set("foo", foo, locations.clone());
-                stripes.set("bar", bar, locations.clone());
+                stripes.set("bar", bar, locations);
 
                 let parity = xor(foo, bar);
                 let parity_id = id_for(&parity);
@@ -588,7 +585,7 @@ mod tests {
                 let first_parity_loc = stripes.set("bar", &[2], locations.clone()).1.unwrap().0;
 
                 stripes.set("baz", &[4], locations.clone());
-                let second_parity_loc = stripes.set("qux", &[8], locations.clone()).1.unwrap().0;
+                let second_parity_loc = stripes.set("qux", &[8], locations).1.unwrap().0;
 
                 assert_ne!(first_parity_loc, second_parity_loc);
             }
@@ -608,7 +605,7 @@ mod tests {
                 let bar = &[4, 5, 6, 7];
 
                 stripes.set("foo", foo, locations.clone());
-                stripes.set("bar", bar, locations.clone());
+                stripes.set("bar", bar, locations);
 
                 assert_eq!(stripes.drop("foo", &[0, 1, 2, 3][..]), Ok(()));
             }
@@ -620,7 +617,7 @@ mod tests {
                 let locations = nonempty![Memory(42)];
 
                 stripes.set("foo", &[0, 1, 2, 3], locations.clone());
-                stripes.set("bar", &[4, 5, 6, 7], locations.clone());
+                stripes.set("bar", &[4, 5, 6, 7], locations);
                 stripes.drop("foo", &[0, 1, 2, 3][..]).unwrap();
 
                 assert_eq!(stripes.recover("bar", empty_map()), Ok(vec![4, 5, 6, 7]));

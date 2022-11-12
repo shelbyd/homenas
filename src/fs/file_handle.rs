@@ -61,7 +61,7 @@ impl<C: ChunkStore, T: Tree> FileHandle<C, T> {
         Ok(Self {
             chunk_store,
             tree,
-            chunk_size: chunk_size,
+            chunk_size,
             chunks,
             meta_key: meta_key.to_string(),
         })
@@ -91,7 +91,7 @@ impl<C: ChunkStore, T: Tree> FileHandle<C, T> {
             let buf_end = core::cmp::min(buf_end, buf.len());
             let buf = &buf[buf_start..buf_end];
             start += buf.len() as u64;
-            if buf.len() == 0 {
+            if buf.is_empty() {
                 break;
             }
             ret.extend(buf);
@@ -117,8 +117,8 @@ impl<C: ChunkStore, T: Tree> FileHandle<C, T> {
                 buffer.resize(buf_end, 0);
             }
 
-            let mut buffer = &mut buffer[buf_start..buf_end];
-            buf.read_exact(&mut buffer)?;
+            let buffer = &mut buffer[buf_start..buf_end];
+            buf.read_exact(buffer)?;
 
             assert_ne!(buffer.len(), 0);
             write_start += buffer.len() as u64;
@@ -192,10 +192,10 @@ impl Chunk {
         match self {
             Chunk::Ref(r) => Ok(r.clone()),
             Chunk::InMemory(buf, previous_id) => {
-                let id = chunk_store.store(&buf).await?;
+                let id = chunk_store.store(buf).await?;
 
                 if let Some(prev) = previous_id {
-                    chunk_store.drop(&prev).await?;
+                    chunk_store.drop(prev).await?;
                 }
 
                 let ref_ = ChunkRef {
@@ -268,7 +268,7 @@ mod tests {
     fn test_chunk_range() {
         assert_eq!(
             chunk_range(ONE_MB, 4, u32::MAX as u64),
-            (0, 4 as usize, ONE_MB as usize)
+            (0, 4_usize, ONE_MB as usize)
         );
     }
 

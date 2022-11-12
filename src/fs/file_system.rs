@@ -2,23 +2,17 @@ use dashmap::{mapref::entry::Entry as DashMapEntry, DashMap};
 use std::{ffi::OsStr, io::BufRead};
 
 use super::*;
-use crate::{
-    db::{update_typed, *},
-    object_store::*,
-};
+use crate::db::{update_typed, *};
 
-pub struct FileSystem<O, C, T> {
-    #[allow(unused)]
-    object_store: O,
+pub struct FileSystem<C, T> {
     chunk_store: C,
     tree: T,
     open_handles: DashMap<NodeId, FileHandle<C, T>>,
 }
 
-impl<O, C, T> FileSystem<O, C, T> {
-    pub fn new(object_store: O, chunk_store: C, tree: T) -> Self {
+impl<C, T> FileSystem<C, T> {
+    pub fn new(chunk_store: C, tree: T) -> Self {
         Self {
-            object_store,
             chunk_store,
             tree,
             open_handles: Default::default(),
@@ -31,7 +25,7 @@ enum Contents {
     Raw(Vec<u8>),
 }
 
-impl<O: ObjectStore + Clone, C: ChunkStore + Clone, T: Tree + Clone> FileSystem<O, C, T> {
+impl<C: ChunkStore + Clone, T: Tree + Clone> FileSystem<C, T> {
     pub async fn lookup(&self, parent: NodeId, name: &OsStr) -> IoResult<Entry> {
         let parent = self.read_entry(parent).await?;
 
@@ -56,7 +50,7 @@ impl<O: ObjectStore + Clone, C: ChunkStore + Clone, T: Tree + Clone> FileSystem<
             .await?
         {
             Some(e) => Ok(e),
-            None if node == 1 => return Ok(root_entry()),
+            None if node == 1 => Ok(root_entry()),
             None => Err(IoError::NotFound),
         }
     }
@@ -192,13 +186,13 @@ impl<O: ObjectStore + Clone, C: ChunkStore + Clone, T: Tree + Clone> FileSystem<
 
         let (_, node_id) = self
             .update_entry(parent, |parent| {
-                Ok(parent
+                parent
                     .kind
                     .as_dir_mut()
                     .ok_or(IoError::NotADirectory)?
                     .children
                     .remove(name)
-                    .ok_or(IoError::NotFound)?)
+                    .ok_or(IoError::NotFound)
             })
             .await?;
 
@@ -305,17 +299,15 @@ fn root_entry() -> Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stores::Memory;
 
     #[tokio::test]
     async fn empty_root() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
         assert_eq!(
-            fs.lookup(1, &OsStr::new("foo.txt")).await,
+            fs.lookup(1, OsStr::new("foo.txt")).await,
             Err(IoError::NotFound)
         );
 
@@ -343,13 +335,12 @@ mod tests {
     #[tokio::test]
     async fn create_child() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        let created = fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
 
-        let lookup = fs.lookup(1, &OsStr::new("foo.txt")).await.unwrap();
+        let lookup = fs.lookup(1, OsStr::new("foo.txt")).await.unwrap();
         assert_eq!(lookup, created);
 
         let read_entry = fs.read_entry(created.node_id).await.unwrap();
@@ -359,14 +350,13 @@ mod tests {
     #[tokio::test]
     async fn create_child_does_not_have_random_children() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
 
         assert_eq!(
-            fs.lookup(1, &OsStr::new("bar.txt")).await,
+            fs.lookup(1, OsStr::new("bar.txt")).await,
             Err(IoError::NotFound)
         );
     }
@@ -374,11 +364,10 @@ mod tests {
     #[tokio::test]
     async fn list_children_after_create() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        let created = fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
 
         let entries = fs.list_children(1).await.unwrap();
         assert!(entries.contains(&created));
@@ -387,11 +376,10 @@ mod tests {
     #[tokio::test]
     async fn write_read() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        let attrs = fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
         assert_eq!(fs.write(attrs.node_id, 0, 3, &[1, 2, 3][..]).await, Ok(3));
 
@@ -401,11 +389,10 @@ mod tests {
     #[tokio::test]
     async fn read_past_end() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        let attrs = fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
         fs.write(attrs.node_id, 0, 3, &[1, 2, 3][..]).await.unwrap();
 
@@ -419,11 +406,10 @@ mod tests {
     #[tokio::test]
     async fn write_read_includes_size() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
+        let attrs = fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
         assert_eq!(fs.write(attrs.node_id, 0, 3, &[1, 2, 3][..]).await, Ok(3));
         fs.release(attrs.node_id).await.unwrap();
@@ -435,33 +421,31 @@ mod tests {
     #[tokio::test]
     async fn unlink_deletes_file() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
-        fs.unlink(1, &OsStr::new("foo.txt")).await.unwrap();
+        let created = fs.create_file(1, OsStr::new("foo.txt")).await.unwrap();
+        fs.unlink(1, OsStr::new("foo.txt")).await.unwrap();
 
         let entries = fs.list_children(1).await.unwrap();
         assert!(!entries.contains(&created));
 
         assert_eq!(
-            Memory::default()
+            mem_tree
                 .get(&format!("files/{}.meta", created.node_id))
                 .await,
-            Err(IoError::NotFound)
+            Ok(None)
         );
     }
 
     #[tokio::test]
     async fn rmdir_deletes_dir() {
         let mem = memory_chunk_store();
-        let mem_os = Memory::default();
         let mem_tree = MemoryTree::default();
-        let fs = FileSystem::new(&mem_os, &mem, &mem_tree);
+        let fs = FileSystem::new(&mem, &mem_tree);
 
-        let created = fs.create_dir(1, &OsStr::new("foo")).await.unwrap();
-        fs.unlink(1, &OsStr::new("foo")).await.unwrap();
+        let created = fs.create_dir(1, OsStr::new("foo")).await.unwrap();
+        fs.unlink(1, OsStr::new("foo")).await.unwrap();
         fs.forget(created.node_id).await.unwrap();
 
         let entries = fs.list_children(1).await.unwrap();

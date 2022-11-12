@@ -36,7 +36,7 @@ fn smart_backing_dirs() -> Vec<PathBuf> {
     system.refresh_disks_list();
 
     log::info!("Detecting disks");
-    let paths: Vec<_> = system.disks().iter().filter_map(|d| disk_path(d)).collect();
+    let paths: Vec<_> = system.disks().iter().filter_map(disk_path).collect();
     if paths.is_empty() {
         log::warn!("Starting with no paths");
     } else {
@@ -51,7 +51,7 @@ fn smart_backing_dirs() -> Vec<PathBuf> {
 fn disk_path(disk: &Disk) -> Option<PathBuf> {
     log::info!("Determining if usable: {:?}", disk.name());
 
-    if disk.name() == OsString::from("/dev/mapper/data-root") {
+    if disk.name() == "/dev/mapper/data-root" {
         log::info!("  Using unix data root disk");
         if disk.mount_point() == PathBuf::from("/") {
             let path = PROJECT_DIRS.data_dir().to_path_buf();

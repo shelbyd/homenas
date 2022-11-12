@@ -1,7 +1,7 @@
 use polyfuse::*;
 use std::{path::*, sync::Arc, time::Duration};
 
-use crate::{chunk_store::ChunkStore, db::*, fs::*, io::*, object_store::ObjectStore};
+use crate::{chunk_store::ChunkStore, db::*, fs::*, io::*};
 
 pub fn default_mount_path() -> PathBuf {
     PathBuf::from("/mnt/homenas")
@@ -24,9 +24,8 @@ pub fn unmount(path: impl AsRef<Path>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn mount<O, C, T>(fs: FileSystem<O, C, T>, path: impl AsRef<Path>) -> anyhow::Result<()>
+pub fn mount<C, T>(fs: FileSystem<C, T>, path: impl AsRef<Path>) -> anyhow::Result<()>
 where
-    O: ObjectStore + Clone + 'static,
     C: ChunkStore + Clone + 'static,
     T: Tree + Clone + 'static,
 {
@@ -72,12 +71,11 @@ where
     Ok(())
 }
 
-async fn process_operation<'r, O, C, T>(
-    fs: Arc<FileSystem<O, C, T>>,
+async fn process_operation<'r, C, T>(
+    fs: Arc<FileSystem<C, T>>,
     op: Operation<'r, Data<'r>>,
 ) -> Result<Box<dyn polyfuse::bytes::Bytes>, IoError>
 where
-    O: ObjectStore + Clone + 'static,
     C: ChunkStore + Clone + 'static,
     T: Tree + Clone + 'static,
 {

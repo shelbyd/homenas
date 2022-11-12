@@ -44,6 +44,6 @@ impl<C: ChunkStore> ChunkStore for Multi<C> {
 
     async fn locations(&self) -> IoResult<HashSet<Location>> {
         let locs = try_join_all(self.stores.iter().map(|s| s.locations())).await?;
-        Ok(locs.into_iter().flat_map(|l| l).collect())
+        Ok(locs.into_iter().flatten().collect())
     }
 }

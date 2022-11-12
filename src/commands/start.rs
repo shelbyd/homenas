@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use structopt::*;
 
-use crate::{chunk_store::*, db::*, object_store::*, stores::*};
+use crate::{chunk_store::*, db::*};
 
 #[derive(StructOpt, Debug)]
 #[allow(dead_code)] // TODO: Remove.
@@ -45,19 +45,6 @@ impl StartCommand {
         };
         let tree = Arc::new(tree);
 
-        let object_store: Box<dyn ObjectStore> = match &self.backing_dir[..] {
-            [] => Box::new(Memory::default()),
-            [single] => Box::new(FileSystem::new(single)?),
-            [dirs @ ..] => Box::new(crate::stores::Multi::new(
-                dirs.iter()
-                    .map(FileSystem::new)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-        };
-
-        let object_store = Network::new(object_store, self.listen_on, &self.peers).await?;
-        let object_store = Arc::new(object_store);
-
         let chunk_store: Box<dyn ChunkStore> = match &self.backing_dir[..] {
             [] => todo!(),
             [single] => Box::new(FsChunkStore::new(single)?),
@@ -70,7 +57,7 @@ impl StartCommand {
         let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&tree));
         let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&tree));
 
-        let fs = crate::fs::FileSystem::new(object_store, Arc::new(chunk_store), Arc::clone(&tree));
+        let fs = crate::fs::FileSystem::new(Arc::new(chunk_store), Arc::clone(&tree));
 
         if !self.fail_on_existing_mount {
             crate::operating_system::unmount(&self.mount_path)?;

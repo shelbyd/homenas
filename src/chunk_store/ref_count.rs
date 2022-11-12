@@ -82,7 +82,7 @@ where
 
     async fn drop(&self, id: &str) -> IoResult<()> {
         let ref_count = self
-            .update_meta(&id, |meta| {
+            .update_meta(id, |meta| {
                 let entry = meta.counts.entry(id.to_string()).or_default();
                 *entry -= 1;
 

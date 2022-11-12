@@ -72,11 +72,7 @@ where
 
         let next_bytes: Option<Vec<u8>> = next.map(|v| ser(&v)).transpose()?;
         let swap_result = tree
-            .compare_and_swap(
-                key,
-                current_bytes.as_ref().map(Vec::as_slice),
-                next_bytes.as_ref().map(Vec::as_slice),
-            )
+            .compare_and_swap(key, current_bytes.as_deref(), next_bytes.as_deref())
             .await?;
 
         match swap_result {
