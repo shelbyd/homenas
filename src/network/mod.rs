@@ -1,18 +1,18 @@
 use crate::{chunk_store::*, db::*, io::*};
 
-use async_raft::{error::*, *};
+use async_raft::{error::*, raft::*, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
 mod raft;
 use raft::*;
 
-pub struct NetworkStore<T, C> {
+pub struct NetworkStore<T: Tree + 'static, C> {
     backing_tree: T,
     backing_chunks: C,
-    raft: HomeNasRaft,
+    raft: HomeNasRaft<T>,
 }
 
-impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
+impl<T: Tree + Clone + 'static, C: ChunkStore> NetworkStore<T, C> {
     pub async fn create(
         backing_tree: T,
         backing_chunks: C,
@@ -36,7 +36,11 @@ impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
             node_id,
             Arc::new(Config::build("HomeNAS".to_string()).validate()?),
             Arc::new(network),
-            Arc::new(raft::Storage { node_id, sled }),
+            Arc::new(raft::Storage {
+                node_id,
+                sled,
+                backing: backing_tree.clone(),
+            }),
         );
         raft.initialize(members).await?;
 
@@ -51,31 +55,47 @@ impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
 #[async_trait::async_trait]
 impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        match self.raft.client_read().await {
-            Ok(()) => {}
-            Err(ClientReadError::ForwardToLeader(mut leader)) => {
-                while let None = leader {
-                    let mut metrics = self.raft.metrics();
-                    metrics.changed().await.map_err(|e| {
-                        log::error!("{}", e);
-                        IoError::Internal
-                    })?;
-                    leader = metrics.borrow().current_leader;
-                }
-
-                log::info!("{:?}", leader);
-                todo!("ForwardToLeader");
-            }
+        let mut leader = match self.raft.client_read().await {
+            Ok(()) => return self.backing_tree.get(key).await,
             Err(ClientReadError::RaftError(e)) => return Err(e.into()),
+            Err(ClientReadError::ForwardToLeader(leader)) => leader,
+        };
+
+        while let None = leader {
+            let mut metrics = self.raft.metrics();
+            metrics.changed().await.map_err(|e| {
+                log::error!("{}", e);
+                IoError::Internal
+            })?;
+            leader = metrics.borrow().current_leader;
         }
 
-        log::info!("get: {:?}", key);
-        self.backing_tree.get(key).await
+        log::info!("{:?}", leader);
+        todo!("ForwardToLeader");
     }
 
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
-        log::info!("set: {:?}", key);
-        self.backing_tree.set(key, value).await
+        let req =
+            ClientWriteRequest::new(LogEntry::SetKV(key.to_string(), value.map(|v| v.to_vec())));
+
+        let write = self.raft.client_write(req).await;
+        let (_req, mut leader) = match write {
+            Ok(_) => return Ok(()),
+            Err(ClientWriteError::RaftError(e)) => return Err(e.into()),
+            Err(ClientWriteError::ForwardToLeader(req, l)) => (req, l),
+        };
+
+        while let None = leader {
+            let mut metrics = self.raft.metrics();
+            metrics.changed().await.map_err(|e| {
+                log::error!("{}", e);
+                IoError::Internal
+            })?;
+            leader = metrics.borrow().current_leader;
+        }
+
+        log::info!("{:?}", leader);
+        todo!("ForwardToLeader");
     }
 
     async fn compare_and_swap<'p>(

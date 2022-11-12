@@ -1,23 +1,28 @@
 use super::*;
 
 use anyhow::Result;
-use async_raft::{async_trait::async_trait, raft::*, storage::*};
+use async_raft::{async_trait::async_trait, storage::*};
 use serde::*;
 use tokio::fs::*;
 
-pub type HomeNasRaft = Raft<LogEntry, Response, Network, Storage>;
+pub type HomeNasRaft<T> = Raft<LogEntry, Response, Network, Storage<T>>;
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct LogEntry {}
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub enum LogEntry {
+    SetKV(String, Option<Vec<u8>>),
+}
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Response {}
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub enum Response {
+    SetKV,
+}
 
 pub struct Network {}
 
-pub struct Storage {
+pub struct Storage<T: Tree> {
     pub node_id: u64,
     pub sled: sled::Db,
+    pub backing: T,
 }
 
 impl Network {
@@ -58,7 +63,7 @@ impl RaftNetwork<LogEntry> for Network {
 }
 
 #[async_trait]
-impl RaftStorage<LogEntry, Response> for Storage {
+impl<T: Tree + 'static> RaftStorage<LogEntry, Response> for Storage<T> {
     type Snapshot = File;
     type ShutdownError = IoError;
 
@@ -108,10 +113,16 @@ impl RaftStorage<LogEntry, Response> for Storage {
     async fn apply_entry_to_state_machine(
         &self,
         _index: &u64,
-        _data: &LogEntry,
+        entry: &LogEntry,
     ) -> Result<Response> {
-        log::error!("apply_entry_to_state_machine");
-        Err(IoError::Unimplemented.into())
+        match entry {
+            LogEntry::SetKV(key, value) => {
+                self.backing
+                    .set(key, value.as_ref().map(Vec::as_slice))
+                    .await?;
+                Ok(Response::SetKV)
+            }
+        }
     }
 
     async fn replicate_to_state_machine(&self, _entries: &[(&u64, &LogEntry)]) -> Result<()> {

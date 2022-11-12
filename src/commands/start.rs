@@ -55,7 +55,7 @@ impl StartCommand {
 
         let store = Arc::new(
             NetworkStore::create(
-                tree,
+                Arc::new(tree),
                 chunk_store,
                 self.listen_on,
                 &self.peers,
