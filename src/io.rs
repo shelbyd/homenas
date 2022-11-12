@@ -63,3 +63,16 @@ impl From<sled::Error> for IoError {
         }
     }
 }
+
+impl From<async_raft::error::RaftError> for IoError {
+    fn from(e: async_raft::error::RaftError) -> Self {
+        use async_raft::error::RaftError::*;
+
+        match e {
+            ShuttingDown => IoError::Internal,
+            unhandled => {
+                unimplemented!("unhandled: {:?}", unhandled);
+            }
+        }
+    }
+}

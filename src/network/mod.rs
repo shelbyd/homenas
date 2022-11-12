@@ -1,10 +1,15 @@
 use crate::{chunk_store::*, db::*, io::*};
 
-use std::{net::SocketAddr, path::Path};
+use async_raft::{error::*, *};
+use std::{net::SocketAddr, path::Path, sync::Arc};
+
+mod raft;
+use raft::*;
 
 pub struct NetworkStore<T, C> {
     backing_tree: T,
     backing_chunks: C,
+    raft: HomeNasRaft,
 }
 
 impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
@@ -13,11 +18,19 @@ impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
         backing_chunks: C,
         _listen_on: u16,
         _peers: &[SocketAddr],
-        _state_dir: impl AsRef<Path>,
+        state_dir: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
+        let raft = Raft::new(
+            crate::obtain_id(state_dir.as_ref().join("raft_id"))?,
+            Arc::new(Config::build("HomeNAS".to_string()).validate()?),
+            Arc::new(raft::Network {}),
+            Arc::new(raft::Storage {}),
+        );
+
         Ok(NetworkStore {
             backing_tree,
             backing_chunks,
+            raft,
         })
     }
 }
@@ -25,6 +38,12 @@ impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
 #[async_trait::async_trait]
 impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
+        match self.raft.client_read().await {
+            Ok(()) => {}
+            Err(ClientReadError::ForwardToLeader(_leader)) => todo!(),
+            Err(ClientReadError::RaftError(e)) => return Err(e.into()),
+        }
+
         log::info!("get: {:?}", key);
         self.backing_tree.get(key).await
     }
