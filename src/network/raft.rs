@@ -15,7 +15,17 @@ pub struct Response {}
 
 pub struct Network {}
 
-pub struct Storage {}
+pub struct Storage {
+    pub node_id: u64,
+    pub sled: sled::Db,
+}
+
+impl Network {
+    pub async fn discover(&mut self) -> anyhow::Result<HashSet<NodeId>> {
+        log::warn!("TODO(shelbyd): Implement network discovery, or at least use args");
+        Ok(HashSet::default())
+    }
+}
 
 impl AppData for LogEntry {}
 
@@ -58,13 +68,20 @@ impl RaftStorage<LogEntry, Response> for Storage {
     }
 
     async fn get_initial_state(&self) -> Result<InitialState> {
-        log::error!("get_initial_state");
-        Err(IoError::Unimplemented.into())
+        log::warn!("TODO(shelbyd): Get all values");
+
+        let mut base = InitialState::new_initial(self.node_id);
+
+        if let Some(hard_state) = self.sled.get("hard_state")? {
+            base.hard_state = crate::from_slice(hard_state)?;
+        }
+
+        Ok(InitialState::new_initial(self.node_id))
     }
 
-    async fn save_hard_state(&self, _state: &HardState) -> Result<()> {
-        log::error!("save_hard_state");
-        Err(IoError::Unimplemented.into())
+    async fn save_hard_state(&self, state: &HardState) -> Result<()> {
+        self.sled.insert("hard_state", crate::to_vec(state)?)?;
+        Ok(())
     }
 
     async fn get_log_entries(&self, _start: u64, _end: u64) -> Result<Vec<Entry<LogEntry>>> {
@@ -77,9 +94,10 @@ impl RaftStorage<LogEntry, Response> for Storage {
         Err(IoError::Unimplemented.into())
     }
 
-    async fn append_entry_to_log(&self, _entry: &Entry<LogEntry>) -> Result<()> {
-        log::error!("append_entry_to_log");
-        Err(IoError::Unimplemented.into())
+    async fn append_entry_to_log(&self, entry: &Entry<LogEntry>) -> Result<()> {
+        self.sled
+            .insert(format!("log/{}", entry.index), crate::to_vec(entry)?)?;
+        Ok(())
     }
 
     async fn replicate_to_log(&self, _entries: &[Entry<LogEntry>]) -> Result<()> {
@@ -124,7 +142,7 @@ impl RaftStorage<LogEntry, Response> for Storage {
     }
 
     async fn get_current_snapshot(&self) -> Result<Option<CurrentSnapshotData<File>>> {
-        log::error!("get_current_snapshot");
-        Err(IoError::Unimplemented.into())
+        log::warn!("TODO(shelbyd): Returning empty snapsot");
+        Ok(None)
     }
 }

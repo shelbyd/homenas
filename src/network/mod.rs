@@ -13,19 +13,32 @@ pub struct NetworkStore<T, C> {
 }
 
 impl<T: Tree, C: ChunkStore> NetworkStore<T, C> {
-    pub fn create(
+    pub async fn create(
         backing_tree: T,
         backing_chunks: C,
         _listen_on: u16,
         _peers: &[SocketAddr],
         state_dir: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
+        let state_dir = state_dir.as_ref();
+        let sled = sled::open(state_dir)?;
+
+        let node_id = sled
+            .get("node_id")?
+            .map(crate::from_slice)
+            .unwrap_or(Ok(rand::random()))?;
+
+        let mut network = raft::Network {};
+        let mut members = network.discover().await?;
+        members.insert(node_id);
+
         let raft = Raft::new(
-            crate::obtain_id(state_dir.as_ref().join("raft_id"))?,
+            node_id,
             Arc::new(Config::build("HomeNAS".to_string()).validate()?),
-            Arc::new(raft::Network {}),
-            Arc::new(raft::Storage {}),
+            Arc::new(network),
+            Arc::new(raft::Storage { node_id, sled }),
         );
+        raft.initialize(members).await?;
 
         Ok(NetworkStore {
             backing_tree,
@@ -40,7 +53,19 @@ impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         match self.raft.client_read().await {
             Ok(()) => {}
-            Err(ClientReadError::ForwardToLeader(_leader)) => todo!(),
+            Err(ClientReadError::ForwardToLeader(mut leader)) => {
+                while let None = leader {
+                    let mut metrics = self.raft.metrics();
+                    metrics.changed().await.map_err(|e| {
+                        log::error!("{}", e);
+                        IoError::Internal
+                    })?;
+                    leader = metrics.borrow().current_leader;
+                }
+
+                log::info!("{:?}", leader);
+                todo!("ForwardToLeader");
+            }
             Err(ClientReadError::RaftError(e)) => return Err(e.into()),
         }
 

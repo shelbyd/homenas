@@ -69,9 +69,13 @@ impl From<async_raft::error::RaftError> for IoError {
         use async_raft::error::RaftError::*;
 
         match e {
-            ShuttingDown => IoError::Internal,
+            ShuttingDown => {
+                log::error!("Got Raft shutdown");
+                IoError::Internal
+            }
             unhandled => {
-                unimplemented!("unhandled: {:?}", unhandled);
+                log::warn!("Unhandled RaftError: {:?}", unhandled);
+                IoError::Unimplemented
             }
         }
     }

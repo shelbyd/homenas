@@ -30,3 +30,11 @@ pub fn obtain_id(file_path: impl AsRef<Path>) -> anyhow::Result<u64> {
         Err(e) => Err(anyhow::anyhow!(e)),
     }
 }
+
+pub fn from_slice<T: serde::de::DeserializeOwned>(vec: impl AsRef<[u8]>) -> anyhow::Result<T> {
+    Ok(serde_cbor::from_slice(vec.as_ref())?)
+}
+
+pub fn to_vec<T: serde::Serialize>(t: &T) -> anyhow::Result<Vec<u8>> {
+    Ok(serde_cbor::to_vec(t)?)
+}
