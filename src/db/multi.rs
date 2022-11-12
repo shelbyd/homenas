@@ -1,5 +1,5 @@
 use super::*;
-use crate::object_store::ResultExt;
+use crate::utils::*;
 
 use futures::future::*;
 

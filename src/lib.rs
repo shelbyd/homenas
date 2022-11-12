@@ -8,8 +8,9 @@ mod db;
 mod fs;
 mod io;
 pub mod logging;
-mod object_store;
 pub mod operating_system;
+mod utils;
+pub use utils::*;
 
 #[cfg(test)]
 mod testing;

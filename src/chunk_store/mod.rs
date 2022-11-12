@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, ops::Deref};
 
-use crate::{db::*, io::*, object_store::*};
+use crate::{db::*, io::*};
 
 mod file_system;
 pub use file_system::*;
@@ -19,6 +20,12 @@ pub use striping::*;
 
 pub fn id_for(chunk: &[u8]) -> String {
     hex::encode(blake3::hash(chunk).as_bytes())
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
+pub enum Location {
+    Memory(u64),
+    Directory(u64),
 }
 
 #[async_trait::async_trait]

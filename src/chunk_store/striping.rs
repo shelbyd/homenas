@@ -6,6 +6,7 @@ use serde::*;
 use std::collections::{HashMap, HashSet};
 
 use super::*;
+use crate::utils::*;
 
 type ChunkId = String;
 type StripeId = String;
@@ -404,7 +405,7 @@ mod tests {
     mod stripe_meta {
         use super::{test, *};
 
-        use crate::object_store::Location::*;
+        use crate::chunk_store::Location::*;
 
         fn empty_map() -> HashMap<&'static str, Vec<u8>> {
             hashmap! {}
