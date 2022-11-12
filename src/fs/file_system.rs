@@ -306,11 +306,13 @@ fn root_entry() -> Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stores::Memory;
 
     #[tokio::test]
     async fn empty_root() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         assert_eq!(
             fs.lookup(1, &OsStr::new("foo.txt")).await,
@@ -341,7 +343,8 @@ mod tests {
     #[tokio::test]
     async fn create_child() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
 
@@ -355,7 +358,8 @@ mod tests {
     #[tokio::test]
     async fn create_child_does_not_have_random_children() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
 
@@ -368,7 +372,8 @@ mod tests {
     #[tokio::test]
     async fn list_children_after_create() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
 
@@ -379,7 +384,8 @@ mod tests {
     #[tokio::test]
     async fn write_read() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
@@ -391,7 +397,8 @@ mod tests {
     #[tokio::test]
     async fn read_past_end() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
@@ -407,7 +414,8 @@ mod tests {
     #[tokio::test]
     async fn write_read_includes_size() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let attrs = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.open(attrs.node_id).await.unwrap();
@@ -421,7 +429,8 @@ mod tests {
     #[tokio::test]
     async fn unlink_deletes_file() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let created = fs.create_file(1, &OsStr::new("foo.txt")).await.unwrap();
         fs.unlink(1, &OsStr::new("foo.txt")).await.unwrap();
@@ -430,7 +439,7 @@ mod tests {
         assert!(!entries.contains(&created));
 
         assert_eq!(
-            mem.backing
+            Memory::default()
                 .get(&format!("files/{}.meta", created.node_id))
                 .await,
             Err(IoError::NotFound)
@@ -440,7 +449,8 @@ mod tests {
     #[tokio::test]
     async fn rmdir_deletes_dir() {
         let mem = memory_chunk_store();
-        let fs = FileSystem::new(&mem.backing, &mem);
+        let mem_os = Memory::default();
+        let fs = FileSystem::new(&mem_os, &mem);
 
         let created = fs.create_dir(1, &OsStr::new("foo")).await.unwrap();
         fs.unlink(1, &OsStr::new("foo")).await.unwrap();
@@ -450,7 +460,7 @@ mod tests {
         assert!(!entries.contains(&created));
 
         assert_eq!(
-            mem.backing
+            Memory::default()
                 .get(&format!("files/{}.meta", created.node_id))
                 .await,
             Err(IoError::NotFound)

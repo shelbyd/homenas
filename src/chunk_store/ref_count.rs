@@ -137,10 +137,10 @@ mod tests {
         let store = RefCount::new(&mem, "meta", Memory::default());
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
-        let after_one = mem.backing.len();
+        let after_one = mem.len();
 
         store.store(&[0, 1, 2, 3, 4, 5, 6, 7]).await.unwrap();
-        assert_ne!(mem.backing.len(), after_one);
+        assert_ne!(mem.len(), after_one);
     }
 
     #[tokio::test]
@@ -149,10 +149,10 @@ mod tests {
         let store = RefCount::new(&mem, "meta", Memory::default());
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
-        let after_one = mem.backing.len();
+        let after_one = mem.len();
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
-        assert_eq!(mem.backing.len(), after_one);
+        assert_eq!(mem.len(), after_one);
     }
 
     #[tokio::test]
@@ -163,7 +163,7 @@ mod tests {
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.drop(&id).await.unwrap();
 
-        assert!(!mem.backing.values().contains(&vec![0, 1, 2, 3]));
+        assert!(!mem.values().contains(&vec![0, 1, 2, 3]));
     }
 
     #[tokio::test]
@@ -189,6 +189,6 @@ mod tests {
         mem.drop(&id).await.unwrap();
 
         store.store(&[0, 1, 2, 3]).await.unwrap();
-        assert!(!mem.backing.values().contains(&vec![0, 1, 2, 3]));
+        assert!(!mem.values().contains(&vec![0, 1, 2, 3]));
     }
 }

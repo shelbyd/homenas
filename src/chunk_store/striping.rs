@@ -331,6 +331,7 @@ fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use maplit::*;
+    use test_log::test;
 
     #[test]
     fn xor_test() {
@@ -344,7 +345,7 @@ mod tests {
     #[tokio::test]
     async fn single_insert_inserts_to_backing() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta", &mem.backing);
+        let store = Striping::new(&mem, "meta", Memory::default());
 
         let id = store.store(&[0, 1, 2, 3]).await.unwrap();
 
@@ -354,7 +355,7 @@ mod tests {
     #[tokio::test]
     async fn recovers_first_write_after_underlying_failure() {
         let mem = memory_chunk_store();
-        let store = Striping::new(&mem, "meta", &mem.backing);
+        let store = Striping::new(&mem, "meta", Memory::default());
 
         let first = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.store(&[4, 5, 6, 7]).await.unwrap();
@@ -367,41 +368,40 @@ mod tests {
     #[tokio::test]
     async fn another_instance_recovers_first_write_after_underlying_failure() {
         let mem = memory_chunk_store();
-        let mem_os = &mem.backing;
-        let store = Striping::new(&mem, "meta", mem_os);
+        let mem_os = Memory::default();
+        let store = Striping::new(&mem, "meta", &mem_os);
 
         let first = store.store(&[0, 1, 2, 3]).await.unwrap();
         store.store(&[4, 5, 6, 7]).await.unwrap();
         mem.drop(&first).await.unwrap();
 
         assert_eq!(
-            Striping::new(&mem, "meta", mem_os).read(&first).await,
+            Striping::new(&mem, "meta", &mem_os).read(&first).await,
             Ok(vec![0, 1, 2, 3])
         );
     }
 
     #[tokio::test]
     async fn dropping_two_allows_recovering_another() {
-        let backing_1 = Memory::default();
-        let backing_2 = Memory::default();
-        let backing_3 = Memory::default();
-        let backing = Multi::new([&backing_1, &backing_2, &backing_3]);
-        let direct = Direct::new(&backing, "chunks");
+        let backing_1 = MemChunkStore::default();
+        let backing_2 = MemChunkStore::default();
+        let backing_3 = MemChunkStore::default();
+        let chunk_store = crate::chunk_store::Multi::new([&backing_1, &backing_2, &backing_3]);
 
-        let store = Striping::new(&direct, "meta", &backing);
+        let store = Striping::new(&chunk_store, "meta", Memory::default());
 
         let first = store.store(&[1]).await.unwrap();
         let second = store.store(&[2]).await.unwrap();
 
         store.drop(&first).await.unwrap();
-        direct.drop(&second).await.unwrap();
+        chunk_store.drop(&second).await.unwrap();
 
         assert_eq!(store.read(&second).await, Ok(vec![2]));
     }
 
     #[cfg(test)]
     mod stripe_meta {
-        use super::*;
+        use super::{test, *};
 
         use crate::object_store::Location::*;
 
@@ -595,7 +595,7 @@ mod tests {
 
         #[cfg(test)]
         mod dropping {
-            use super::*;
+            use super::{test, *};
 
             #[test]
             fn striped_allows_recover() {

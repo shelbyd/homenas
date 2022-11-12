@@ -54,10 +54,19 @@ impl StartCommand {
             )),
         };
 
+        let chunk_store: Box<dyn ChunkStore> = match &self.backing_dir[..] {
+            [] => todo!(),
+            [single] => Box::new(FsChunkStore::new(single)?),
+            [dirs @ ..] => Box::new(crate::chunk_store::Multi::new(
+                dirs.iter()
+                    .map(FsChunkStore::new)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+        };
+
         let object_store = Network::new(object_store, self.listen_on, &self.peers).await?;
         let object_store = Arc::new(object_store);
 
-        let chunk_store = Direct::new(Arc::clone(&object_store), "chunks");
         let chunk_store = Striping::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
         let chunk_store = RefCount::new(chunk_store, "meta/chunks", Arc::clone(&object_store));
 
