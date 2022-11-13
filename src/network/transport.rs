@@ -182,7 +182,14 @@ impl Transport {
                     }
                 }
             }
+
             log::warn!("Closing stream with peer: {}", addr);
+            self.peers.remove(&peer_id);
+            self.send_application_request(Request::Raft(RaftRequest::ChangeMembership(
+                self.raft_members(),
+            )))
+            .await
+            .ok();
         });
     }
 
@@ -199,13 +206,14 @@ impl Transport {
     }
 
     async fn send_message(&self, node_id: NodeId, message: Message) -> Result<()> {
-        self.peers
-            .get_mut(&node_id)
-            .expect("called request on missing node id")
-            .send
-            .send(message)
-            .await?;
+        let mut peer = match self.peers.get_mut(&node_id) {
+            Some(p) => p,
+            None => {
+                anyhow::bail!("Attempting to send message to missing node: {}", node_id)
+            }
+        };
 
+        peer.send.send(message).await?;
         Ok(())
     }
 

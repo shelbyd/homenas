@@ -131,28 +131,29 @@ fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
 ) {
     tokio::task::spawn(async move {
         while let Some((req, response_tx)) = receiver.recv().await {
-            log::debug!("Internal message: {:?}", req);
-            let resp: anyhow::Result<_> = async {
-                match req {
-                    Request::Raft(RaftRequest::Vote(vote)) => Ok(Response::Raft(
-                        RaftResponse::Vote(this.raft.vote(vote).await?),
-                    )),
-                    Request::Raft(RaftRequest::ChangeMembership(members)) => {
-                        log::info!("Changing membership: {:?}", members);
-                        this.raft.change_membership(members, false).await?;
-                        Ok(Response::Raft(RaftResponse::ChangeMembership))
+            let this = Arc::clone(&this);
+            tokio::task::spawn(async move {
+                let resp: anyhow::Result<_> = async {
+                    match req {
+                        Request::Raft(RaftRequest::Vote(vote)) => Ok(Response::Raft(
+                            RaftResponse::Vote(this.raft.vote(vote).await?),
+                        )),
+                        Request::Raft(RaftRequest::ChangeMembership(members)) => {
+                            log::info!("Changing membership: {:?}", members);
+                            this.raft.change_membership(members, false).await?;
+                            Ok(Response::Raft(RaftResponse::ChangeMembership))
+                        }
+                        Request::Raft(RaftRequest::AppendEntries(req)) => {
+                            let resp = this.raft.append_entries(req).await?;
+                            Ok(Response::Raft(RaftResponse::AppendEntries(resp)))
+                        }
+                        Request::Get(key) => Ok(Response::Get(this.get(&key).await?)),
+                        Request::Write(req) => Ok(Response::Write(this.do_write(req).await?)),
                     }
-                    Request::Raft(RaftRequest::AppendEntries(req)) => {
-                        let resp = this.raft.append_entries(req).await?;
-                        Ok(Response::Raft(RaftResponse::AppendEntries(resp)))
-                    }
-                    Request::Get(key) => Ok(Response::Get(this.get(&key).await?)),
-                    Request::Write(req) => Ok(Response::Write(this.do_write(req).await?)),
                 }
-            }
-            .await;
-            log::debug!("Internal response: {:?}", resp);
-            response_tx.send(resp).ok();
+                .await;
+                response_tx.send(resp).ok();
+            });
         }
     });
 }

@@ -200,13 +200,18 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStor
         Ok(result)
     }
 
+    async fn get_current_snapshot(&self) -> Result<Option<Snapshot<File>>> {
+        log::error!("Unimplemented: get_current_snapshot");
+        Ok(None)
+    }
+
     async fn build_snapshot(&self) -> Result<Snapshot<File>> {
-        log::warn!("Unimplemented: build_snapshot");
+        log::error!("Unimplemented: build_snapshot");
         unimplemented!("build_snapshot");
     }
 
     async fn begin_receiving_snapshot(&self) -> Result<Box<File>> {
-        log::warn!("Unimplemented: begin_receiving_snapshot");
+        log::error!("Unimplemented: begin_receiving_snapshot");
         unimplemented!("begin_receiving_snapshot");
     }
 
@@ -215,12 +220,8 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStor
         _meta: &SnapshotMeta,
         _snapshot: Box<File>,
     ) -> Result<StateMachineChanges> {
+        log::error!("Unimplemented: install_snapshot");
         unimplemented!("install_snapshot");
-    }
-
-    async fn get_current_snapshot(&self) -> Result<Option<Snapshot<File>>> {
-        log::warn!("Unimplemented: get_current_snapshot");
-        Ok(None)
     }
 }
 
