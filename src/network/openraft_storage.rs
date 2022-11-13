@@ -5,13 +5,20 @@ use crate::log_err;
 use openraft::{ErrorSubject::*, ErrorVerb::*, HardState, Snapshot, *};
 use serde::*;
 use std::{ops::RangeBounds, option::Option::None, path::*};
-use tokio::fs::*;
+use tokio::{fs::*, sync::Mutex};
 
 type Result<T> = std::result::Result<T, StorageError>;
 
 pub struct OpenRaftStore {
     sled: sled::Db,
     logs: sled::Tree,
+    state: Mutex<State>,
+}
+
+#[derive(Default)]
+struct State {
+    last_applied_id: Option<LogId>,
+    membership: Option<EffectiveMembership>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -36,6 +43,7 @@ impl OpenRaftStore {
         Ok(Self {
             logs: db.open_tree("logs")?,
             sled: db,
+            state: Mutex::new(State::default()),
         })
     }
 
@@ -48,22 +56,39 @@ impl OpenRaftStore {
 impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
     type SnapshotData = File;
 
-    async fn save_hard_state(&self, _state: &HardState) -> Result<()> {
-        unimplemented!("save_hard_state");
+    async fn save_hard_state(&self, state: &HardState) -> Result<()> {
+        self.sled
+            .insert("hard_state", crate::to_vec(state).unwrap())
+            .storage(ErrorSubject::HardState, Write)?;
+        Ok(())
     }
 
     async fn read_hard_state(&self) -> Result<Option<HardState>> {
-        unimplemented!("read_hard_state");
+        Ok(self
+            .sled
+            .get("hard_state")
+            .storage(ErrorSubject::HardState, Read)?
+            .map(|b| crate::from_slice(b).unwrap()))
     }
 
     async fn get_log_state(&self) -> Result<LogState> {
+        let last_purged_log_id = self
+            .sled
+            .get("log_state/last_purged")
+            .storage(Logs, Read)?
+            .map(|b| crate::from_slice(b).unwrap());
+
+        let last_log_id = self
+            .sled
+            .get("log_state/last_id")
+            .storage(Logs, Read)?
+            .map(|b| crate::from_slice::<LogId>(b).unwrap());
+
+        let last_log_id = core::cmp::max(last_purged_log_id, last_log_id);
+
         Ok(LogState {
-            last_purged_log_id: None,
-            last_log_id: self
-                .sled
-                .get("log_state/last_id")
-                .storage(Logs, Read)?
-                .map(|b| crate::from_slice::<LogId>(b).unwrap()),
+            last_purged_log_id,
+            last_log_id,
         })
     }
 
@@ -104,19 +129,47 @@ impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
         unimplemented!("delete_conflict_logs_since");
     }
 
-    async fn purge_logs_upto(&self, _id: LogId) -> Result<()> {
-        unimplemented!("purge_logs_upto");
+    async fn purge_logs_upto(&self, id: LogId) -> Result<()> {
+        for result in self.logs.range(..=(self.log_key(id.index))) {
+            let (key, _) = result.storage(Logs, Delete)?;
+            self.logs.remove(key).storage(Logs, Delete)?;
+        }
+
+        self.sled
+            .insert("log_state/last_purged", crate::to_vec(&id).unwrap())
+            .storage(Logs, Write)?;
+
+        Ok(())
     }
 
     async fn last_applied_state(&self) -> Result<(Option<LogId>, Option<EffectiveMembership>)> {
-        unimplemented!("last_applied_state");
+        let lock = self.state.lock().await;
+
+        Ok((lock.last_applied_id, lock.membership.as_ref().cloned()))
     }
 
     async fn apply_to_state_machine(
         &self,
-        _entries: &[&Entry<LogEntry>],
+        entries: &[&Entry<LogEntry>],
     ) -> Result<Vec<LogEntryResponse>> {
-        log::warn!("Not implemented: apply_to_state_machine");
+        for &entry in entries {
+            match &entry.payload {
+                EntryPayload::Blank => {}
+                EntryPayload::Membership(membership) => {
+                    let mut lock = self.state.lock().await;
+                    lock.membership = Some(EffectiveMembership {
+                        membership: membership.clone(),
+                        log_id: entry.log_id,
+                    });
+                }
+
+                unhandled => {
+                    unimplemented!("unhandled: {:?}", unhandled);
+                }
+            }
+
+            self.state.lock().await.last_applied_id = Some(entry.log_id);
+        }
 
         Ok(Vec::new())
     }
@@ -172,7 +225,6 @@ mod tests {
     use super::*;
 
     #[test_log::test]
-    #[ignore]
     fn openraft_suite() {
         openraft::testing::Suite::test_all(|| async {
             let tempdir = tempfile::tempdir().unwrap();
