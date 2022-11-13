@@ -67,3 +67,11 @@ macro_rules! log_err {
         }
     }};
 }
+
+pub fn diff<T: PartialEq>(a: T, b: T) -> Option<(T, T)> {
+    if a == b {
+        None
+    } else {
+        Some((a, b))
+    }
+}

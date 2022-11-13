@@ -25,7 +25,7 @@ pub trait Tree: Send + Sync {
     ) -> IoResult<Result<(), CompareAndSwapError>>;
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct CompareAndSwapError {
     current: Option<Vec<u8>>,
 }

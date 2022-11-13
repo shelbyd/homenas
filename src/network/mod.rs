@@ -52,6 +52,8 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
         );
         raft.initialize(members).await?;
 
+        tokio::task::spawn(monitor_raft_metrics(raft.metrics()));
+
         let network_store = Arc::new(NetworkStore {
             backing_tree,
             backing_chunks,
@@ -136,7 +138,8 @@ fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
                         RaftResponse::Vote(this.raft.vote(vote).await?),
                     )),
                     Request::Raft(RaftRequest::ChangeMembership(members)) => {
-                        this.raft.change_membership(members, true).await?;
+                        log::info!("Changing membership: {:?}", members);
+                        this.raft.change_membership(members, false).await?;
                         Ok(Response::Raft(RaftResponse::ChangeMembership))
                     }
                     Request::Raft(RaftRequest::AppendEntries(req)) => {
@@ -190,15 +193,21 @@ impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
         old: Option<&[u8]>,
         new: Option<&[u8]>,
     ) -> IoResult<Result<(), CompareAndSwapError>> {
-        self.do_write(LogEntry::CompareAndSwap(
-            key.to_string(),
-            opt_vec(old),
-            opt_vec(new),
-        ))
-        .await?;
+        let result = self
+            .do_write(LogEntry::CompareAndSwap(
+                key.to_string(),
+                opt_vec(old),
+                opt_vec(new),
+            ))
+            .await?;
 
-        log::warn!("compare_and_swap: {:?}", key);
-        self.backing_tree.compare_and_swap(key, old, new).await
+        match result {
+            LogEntryResponse::CompareAndSwap(r) => Ok(r),
+            unexpected => {
+                log::error!("Unexpected: {:?}", unexpected);
+                Err(IoError::Internal)
+            }
+        }
     }
 }
 
@@ -222,5 +231,29 @@ impl<T: Tree, C: ChunkStore> ChunkStore for NetworkStore<T, C> {
 
     async fn locations(&self) -> IoResult<HashSet<Location>> {
         self.backing_chunks.locations().await
+    }
+}
+
+async fn monitor_raft_metrics(
+    mut metrics: tokio::sync::watch::Receiver<RaftMetrics>,
+) -> anyhow::Result<()> {
+    let mut prev = metrics.borrow().clone();
+
+    loop {
+        metrics.changed().await?;
+        let new = metrics.borrow().clone();
+
+        if let Some((prev, new)) = diff(new.current_leader, prev.current_leader) {
+            log::info!("Leader change: {:?} -> {:?}", prev, new,);
+        }
+
+        if let Some((prev, new)) = diff(
+            prev.membership_config.membership.all_nodes(),
+            new.membership_config.membership.all_nodes(),
+        ) {
+            log::info!("Membership change: {:?} -> {:?}", prev, new);
+        }
+
+        prev = new;
     }
 }

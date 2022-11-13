@@ -33,14 +33,16 @@ pub enum LogEntry {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LogEntryResponse {
     RaftOp,
+    Error(String),
+
     SetKV,
-    CompareAndSwap(std::result::Result<(), ()>),
+    CompareAndSwap(std::result::Result<(), CompareAndSwapError>),
 }
 
 impl AppData for LogEntry {}
 impl AppDataResponse for LogEntryResponse {}
 
-impl<T> OpenRaftStore<T> {
+impl<T: Tree> OpenRaftStore<T> {
     pub fn new(db: sled::Db, backing: T) -> anyhow::Result<Self> {
         Ok(Self {
             logs: db.open_tree("logs")?,
@@ -52,6 +54,22 @@ impl<T> OpenRaftStore<T> {
 
     fn log_key(&self, index: u64) -> [u8; 8] {
         index.to_be_bytes()
+    }
+
+    async fn handle_request(&self, req: &LogEntry) -> anyhow::Result<LogEntryResponse> {
+        match req {
+            LogEntry::CompareAndSwap(key, old, new) => {
+                let r = self
+                    .backing
+                    .compare_and_swap(key, opt_slice(&old), opt_slice(&new))
+                    .await?;
+                Ok(LogEntryResponse::CompareAndSwap(r))
+            }
+            LogEntry::SetKV(key, value) => {
+                self.backing.set(key, opt_slice(value)).await?;
+                Ok(LogEntryResponse::SetKV)
+            }
+        }
     }
 }
 
@@ -167,8 +185,12 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStor
                     result.push(LogEntryResponse::RaftOp);
                 }
 
-                unhandled => {
-                    unimplemented!("unhandled: {:?}", unhandled);
+                EntryPayload::Normal(req) => {
+                    let response = self.handle_request(req).await;
+                    match response {
+                        Ok(r) => result.push(r),
+                        Err(e) => result.push(LogEntryResponse::Error(e.to_string())),
+                    }
                 }
             }
 
