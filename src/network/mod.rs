@@ -49,7 +49,6 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
 
         let transport = Transport::create(node_id, listen_on, peers, raft_request_tx).await?;
         let members = transport.raft_members();
-        log::info!("Raft members: {:?}", members);
 
         let raft = Raft::new(
             node_id,
@@ -58,13 +57,16 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
             Arc::new(OpenRaftStore::new(sled, backing_tree.clone())?),
         );
 
+        log::info!("Initializing raft with members: {:?}", members);
         match raft.initialize(members.clone()).await {
             Ok(()) => {}
             Err(InitializeError::NotAllowed) => {
-                raft.change_membership(members, false).await?;
+                log::info!("Got not allowed, trying to change_membership");
+                // raft.change_membership(members, false).await?;
             }
             Err(InitializeError::Fatal(e)) => anyhow::bail!(e),
         }
+        log::info!("Raft initialized");
 
         tokio::task::spawn(monitor_raft_metrics(raft.metrics()));
 
@@ -90,7 +92,7 @@ impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
                 return Err(IoError::Internal);
             }
             Err(ClientReadError::QuorumNotEnough(e)) => {
-                log::error!("{}", e);
+                log::error!("{:?}", e);
                 return Err(IoError::Internal);
             }
             Err(ClientReadError::ForwardToLeader(leader)) => leader.leader_id,
@@ -265,8 +267,11 @@ async fn monitor_raft_metrics(
         metrics.changed().await?;
         let new = metrics.borrow().clone();
 
-        if let Some((prev, new)) = diff(prev.current_leader, new.current_leader) {
-            log::info!("Leader change: {:?} -> {:?}", prev, new,);
+        if let Some((prev_leader, new_leader)) = diff(prev.current_leader, new.current_leader) {
+            log::info!("Leader change: {:?} -> {:?}", prev_leader, new_leader);
+            if new_leader == Some(new.id) {
+                log::info!("This node is now the leader");
+            }
         }
 
         if let Some((prev, new)) = diff(

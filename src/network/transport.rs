@@ -165,12 +165,10 @@ impl Transport {
             .ok();
 
             loop {
-                let message = match log_err!(dbg!(receive.try_next().await)) {
+                let message = match log_err!(receive.try_next().await) {
                     Some(Some(m)) => m,
                     _ => break,
                 };
-
-                log::info!("Message from peer {}: {:?}", addr, message);
 
                 match message {
                     Message::RequestNodeId | Message::NodeId(_) => {
@@ -272,7 +270,6 @@ async fn initial_handshake(
 
         send.send(Message::RequestNodeId).await?;
 
-
         while let Some(message) = receive.try_next().await? {
             match message {
                 Message::RequestNodeId => {
@@ -311,8 +308,6 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
         target: u64,
         rpc: openraft::AppendEntriesRequest<openraft_storage::LogEntry>,
     ) -> Result<openraft::AppendEntriesResponse> {
-        log::warn!("send_append_entries: {:?}", rpc);
-
         let resp = self
             .request(target, Request::Raft(RaftRequest::AppendEntries(rpc)))
             .await?;
@@ -330,8 +325,6 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
         _target: u64,
         _rpc: openraft::types::v070::InstallSnapshotRequest,
     ) -> Result<openraft::types::v070::InstallSnapshotResponse> {
-        // log::warn!("send_install_snapshot: {:?}", _rpc);
-
         unimplemented!("send_install_snapshot");
     }
 
@@ -340,8 +333,6 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
         target: u64,
         rpc: openraft::types::v070::VoteRequest,
     ) -> Result<openraft::types::v070::VoteResponse> {
-        log::warn!("send_vote: {:?}", rpc);
-
         let resp = self
             .request(target, Request::Raft(RaftRequest::Vote(rpc)))
             .await?;

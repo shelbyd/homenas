@@ -31,7 +31,6 @@ tokio-serde = "0.8.0"
 tokio-serde-cbor = "0.7.0"
 tokio-util = "0.7.4"
 openraft = "0.7.3"
-tracing = { version = "0.1.37", features = ["log"] }
 
 [dependencies.tokio]
 version = "1.21.2"
