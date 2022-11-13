@@ -18,6 +18,7 @@ pub struct OpenRaftStore {
 #[derive(Default)]
 struct State {
     last_applied_id: Option<LogId>,
+    last_purged_log_id: Option<LogId>,
     membership: Option<EffectiveMembership>,
 }
 
@@ -59,7 +60,7 @@ impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
     async fn save_hard_state(&self, state: &HardState) -> Result<()> {
         self.sled
             .insert("hard_state", crate::to_vec(state).unwrap())
-            .storage(ErrorSubject::HardState, Write)?;
+            .storage_err(ErrorSubject::HardState, Write)?;
         Ok(())
     }
 
@@ -67,22 +68,20 @@ impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
         Ok(self
             .sled
             .get("hard_state")
-            .storage(ErrorSubject::HardState, Read)?
+            .storage_err(ErrorSubject::HardState, Read)?
             .map(|b| crate::from_slice(b).unwrap()))
     }
 
     async fn get_log_state(&self) -> Result<LogState> {
-        let last_purged_log_id = self
-            .sled
-            .get("log_state/last_purged")
-            .storage(Logs, Read)?
-            .map(|b| crate::from_slice(b).unwrap());
+        let last_purged_log_id = self.state.lock().await.last_purged_log_id;
 
         let last_log_id = self
-            .sled
-            .get("log_state/last_id")
-            .storage(Logs, Read)?
-            .map(|b| crate::from_slice::<LogId>(b).unwrap());
+            .logs
+            .iter()
+            .next_back()
+            .transpose()
+            .storage_err(Logs, Read)?
+            .map(|(_, b)| crate::from_slice::<Entry<LogEntry>>(b).unwrap().log_id);
 
         let last_log_id = core::cmp::max(last_purged_log_id, last_log_id);
 
@@ -116,35 +115,33 @@ impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
             let index = self.log_key(entry.log_id.index);
             self.logs
                 .insert(index, crate::to_vec(entry).unwrap())
-                .storage(Log(entry.log_id), Write)?;
-
-            self.sled
-                .insert("log_state/last_id", crate::to_vec(&entry.log_id).unwrap())
-                .storage(Logs, Write)?;
+                .storage_err(Log(entry.log_id), Write)?;
         }
         Ok(())
     }
 
-    async fn delete_conflict_logs_since(&self, _id: LogId) -> Result<()> {
-        unimplemented!("delete_conflict_logs_since");
+    async fn delete_conflict_logs_since(&self, id: LogId) -> Result<()> {
+        for result in self.logs.range(self.log_key(id.index)..) {
+            let (key, _) = result.storage_err(Logs, Delete)?;
+            self.logs.remove(key).storage_err(Logs, Delete)?;
+        }
+
+        Ok(())
     }
 
     async fn purge_logs_upto(&self, id: LogId) -> Result<()> {
         for result in self.logs.range(..=(self.log_key(id.index))) {
-            let (key, _) = result.storage(Logs, Delete)?;
-            self.logs.remove(key).storage(Logs, Delete)?;
+            let (key, _) = result.storage_err(Logs, Delete)?;
+            self.logs.remove(key).storage_err(Logs, Delete)?;
         }
 
-        self.sled
-            .insert("log_state/last_purged", crate::to_vec(&id).unwrap())
-            .storage(Logs, Write)?;
+        self.state.lock().await.last_purged_log_id = Some(id);
 
         Ok(())
     }
 
     async fn last_applied_state(&self) -> Result<(Option<LogId>, Option<EffectiveMembership>)> {
         let lock = self.state.lock().await;
-
         Ok((lock.last_applied_id, lock.membership.as_ref().cloned()))
     }
 
@@ -196,14 +193,14 @@ impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
 }
 
 trait ResultExt<T, E> {
-    fn storage(self, subject: ErrorSubject, verb: ErrorVerb) -> Result<T>;
+    fn storage_err(self, subject: ErrorSubject, verb: ErrorVerb) -> Result<T>;
 }
 
 impl<T, E> ResultExt<T, E> for std::result::Result<T, E>
 where
     E: std::fmt::Display,
 {
-    fn storage(self, subject: ErrorSubject, verb: ErrorVerb) -> Result<T> {
+    fn storage_err(self, subject: ErrorSubject, verb: ErrorVerb) -> Result<T> {
         self.map_err(|e| StorageError::IO {
             source: StorageIOError::new(subject, verb, AnyError::error(e)),
         })
