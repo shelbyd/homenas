@@ -1,18 +1,20 @@
-// #![allow(unused)]
+use super::*;
 
-use crate::log_err;
-
-use openraft::{ErrorSubject::*, ErrorVerb::*, HardState, Snapshot, *};
+use openraft::{ErrorSubject::*, ErrorVerb::*, HardState, Snapshot};
 use serde::*;
-use std::{ops::RangeBounds, option::Option::None, path::*};
+use std::{ops::RangeBounds, option::Option::None};
 use tokio::{fs::*, sync::Mutex};
 
 type Result<T> = std::result::Result<T, StorageError>;
+pub type HomeNasRaft<T> = Raft<LogEntry, LogEntryResponse, crate::Transport, OpenRaftStore<T>>;
 
-pub struct OpenRaftStore {
+pub struct OpenRaftStore<T> {
     sled: sled::Db,
     logs: sled::Tree,
     state: Mutex<State>,
+
+    #[allow(unused)]
+    backing: T,
 }
 
 #[derive(Default)]
@@ -37,14 +39,13 @@ pub enum LogEntryResponse {
 impl AppData for LogEntry {}
 impl AppDataResponse for LogEntryResponse {}
 
-impl OpenRaftStore {
-    #[allow(unused)]
-    pub fn new(meta_path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let db = sled::open(meta_path.as_ref().join("raft_state"))?;
+impl<T> OpenRaftStore<T> {
+    pub fn new(db: sled::Db, backing: T) -> anyhow::Result<Self> {
         Ok(Self {
             logs: db.open_tree("logs")?,
             sled: db,
             state: Mutex::new(State::default()),
+            backing,
         })
     }
 
@@ -54,7 +55,7 @@ impl OpenRaftStore {
 }
 
 #[openraft::async_trait::async_trait]
-impl RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore {
+impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStore<T> {
     type SnapshotData = File;
 
     async fn save_hard_state(&self, state: &HardState) -> Result<()> {
@@ -225,7 +226,11 @@ mod tests {
     fn openraft_suite() {
         openraft::testing::Suite::test_all(|| async {
             let tempdir = tempfile::tempdir().unwrap();
-            OpenRaftStore::new(tempdir.path()).unwrap()
+            OpenRaftStore::new(
+                sled::open(tempdir.path().join("sled")).unwrap(),
+                MemoryTree::default(),
+            )
+            .unwrap()
         })
         .unwrap();
     }

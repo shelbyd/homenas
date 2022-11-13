@@ -63,20 +63,3 @@ impl From<sled::Error> for IoError {
         }
     }
 }
-
-impl From<async_raft::error::RaftError> for IoError {
-    fn from(e: async_raft::error::RaftError) -> Self {
-        use async_raft::error::RaftError::*;
-
-        match e {
-            ShuttingDown => {
-                log::error!("Got Raft shutdown");
-                IoError::Internal
-            }
-            unhandled => {
-                log::warn!("Unhandled RaftError: {:?}", unhandled);
-                IoError::Unimplemented
-            }
-        }
-    }
-}

@@ -1,13 +1,11 @@
 use crate::{chunk_store::*, db::*, io::*, log_err, utils::*};
 
-use async_raft::{error::*, raft::*, *};
+use openraft::{error::*, raft::*, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 
 mod openraft_storage;
-
-mod raft;
-use raft::*;
+use openraft_storage::*;
 
 mod transport;
 pub use transport::*;
@@ -48,13 +46,9 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
 
         let raft = Raft::new(
             node_id,
-            Arc::new(Config::build("HomeNAS".to_string()).validate()?),
+            Arc::new(Config::build(&["HomeNAS"])?),
             Arc::clone(&transport),
-            Arc::new(raft::Storage {
-                node_id,
-                sled,
-                backing: backing_tree.clone(),
-            }),
+            Arc::new(OpenRaftStore::new(sled, backing_tree.clone())?),
         );
         raft.initialize(members).await?;
 
@@ -75,8 +69,15 @@ impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
     async fn strong_read(&self) -> IoResult<StrongRead> {
         let maybe_leader = match self.raft.client_read().await {
             Ok(()) => return Ok(StrongRead::Ok),
-            Err(ClientReadError::RaftError(e)) => return Err(e.into()),
-            Err(ClientReadError::ForwardToLeader(leader)) => leader,
+            Err(ClientReadError::Fatal(e)) => {
+                log::error!("{}", e);
+                return Err(IoError::Internal);
+            }
+            Err(ClientReadError::QuorumNotEnough(e)) => {
+                log::error!("{}", e);
+                return Err(IoError::Internal);
+            }
+            Err(ClientReadError::ForwardToLeader(leader)) => leader.leader_id,
         };
 
         Ok(StrongRead::ForwardTo(self.get_leader(maybe_leader).await?))
@@ -95,17 +96,22 @@ impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
     }
 
     async fn do_write(&self, write: LogEntry) -> IoResult<LogEntryResponse> {
-        let req = ClientWriteRequest::new(write);
-        let write = self.raft.client_write(req).await;
-        let (req, maybe_leader) = match write {
+        let maybe_leader = match self.raft.client_write(write.clone()).await {
+            Err(ClientWriteError::Fatal(e)) => {
+                log::error!("{}", e);
+                return Err(IoError::Internal);
+            }
+            Err(ClientWriteError::ChangeMembershipError(e)) => {
+                log::error!("{}", e);
+                return Err(IoError::Internal);
+            }
+            Err(ClientWriteError::ForwardToLeader(leader)) => leader.leader_id,
             Ok(resp) => return Ok(resp.data),
-            Err(ClientWriteError::RaftError(e)) => return Err(e.into()),
-            Err(ClientWriteError::ForwardToLeader(req, l)) => (req, l),
         };
 
         let leader = self.get_leader(maybe_leader).await?;
 
-        match log_err!(self.transport.request(leader, Request::Write(req)).await)
+        match log_err!(self.transport.request(leader, Request::Write(write)).await)
             .ok_or(IoError::Internal)?
         {
             Response::Write(r) => Ok(r),
@@ -130,7 +136,7 @@ fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
                         RaftResponse::Vote(this.raft.vote(vote).await?),
                     )),
                     Request::Raft(RaftRequest::ChangeMembership(members)) => {
-                        this.raft.change_membership(members).await?;
+                        this.raft.change_membership(members, true).await?;
                         Ok(Response::Raft(RaftResponse::ChangeMembership))
                     }
                     Request::Raft(RaftRequest::AppendEntries(req)) => {

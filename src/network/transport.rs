@@ -1,11 +1,11 @@
 use super::*;
 
 use anyhow::Result;
-use async_raft::async_trait::async_trait;
 use dashmap::*;
 use futures::{stream::*, SinkExt};
 use serde::*;
 use std::{
+    collections::BTreeSet,
     net::{Ipv4Addr, ToSocketAddrs},
     sync::Arc,
 };
@@ -53,14 +53,14 @@ enum Message {
 pub enum Request {
     Raft(RaftRequest),
     Get(String),
-    Write(LogEntry),
+    Write(openraft_storage::LogEntry),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RaftRequest {
-    Vote(async_raft::raft::VoteRequest),
-    ChangeMembership(HashSet<NodeId>),
-    AppendEntries(AppendEntriesRequest<LogEntry>),
+    Vote(openraft::types::v070::VoteRequest),
+    ChangeMembership(BTreeSet<NodeId>),
+    AppendEntries(openraft::AppendEntriesRequest<openraft_storage::LogEntry>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -72,7 +72,7 @@ pub enum Response {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RaftResponse {
-    Vote(async_raft::raft::VoteResponse),
+    Vote(openraft::types::v070::VoteResponse),
     ChangeMembership,
     AppendEntries(AppendEntriesResponse),
 }
@@ -111,7 +111,7 @@ impl Transport {
         Ok(transport)
     }
 
-    pub fn raft_members(&self) -> HashSet<NodeId> {
+    pub fn raft_members(&self) -> BTreeSet<NodeId> {
         self.peers
             .iter()
             .map(|entry| *entry.key())
@@ -261,44 +261,29 @@ async fn initial_handshake(
     Ok(timeout(Duration::from_secs(5), do_connect).await??)
 }
 
-#[async_trait]
-impl RaftNetwork<LogEntry> for Transport {
-    async fn append_entries(
+#[openraft::async_trait::async_trait]
+impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
+    async fn send_append_entries(
         &self,
-        node_id: u64,
-        request: AppendEntriesRequest<LogEntry>,
-    ) -> Result<AppendEntriesResponse> {
-        let resp = self
-            .request(node_id, Request::Raft(RaftRequest::AppendEntries(request)))
-            .await?;
-
-        match resp {
-            Response::Raft(RaftResponse::AppendEntries(r)) => Ok(r),
-            unexpected => {
-                anyhow::bail!("Unexpected response: {:?}", unexpected);
-            }
-        }
+        _target: u64,
+        _rpc: openraft::AppendEntriesRequest<openraft_storage::LogEntry>,
+    ) -> Result<openraft::AppendEntriesResponse> {
+        unimplemented!("send_append_entries");
     }
 
-    async fn install_snapshot(
+    async fn send_install_snapshot(
         &self,
-        _node_id: u64,
-        _req: InstallSnapshotRequest,
-    ) -> Result<InstallSnapshotResponse> {
-        log::error!("install_snapshot");
-        Err(IoError::Unimplemented.into())
+        _target: u64,
+        _rpc: openraft::types::v070::InstallSnapshotRequest,
+    ) -> Result<openraft::types::v070::InstallSnapshotResponse> {
+        unimplemented!("send_install_snapshot");
     }
 
-    async fn vote(&self, node_id: u64, req: VoteRequest) -> Result<VoteResponse> {
-        let resp = self
-            .request(node_id, Request::Raft(RaftRequest::Vote(req)))
-            .await?;
-
-        match resp {
-            Response::Raft(RaftResponse::Vote(r)) => Ok(r),
-            unexpected => {
-                anyhow::bail!("Unexpected response: {:?}", unexpected);
-            }
-        }
+    async fn send_vote(
+        &self,
+        _target: u64,
+        _rpc: openraft::types::v070::VoteRequest,
+    ) -> Result<openraft::types::v070::VoteResponse> {
+        unimplemented!("send_vote");
     }
 }
