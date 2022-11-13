@@ -1,3 +1,5 @@
+#![feature(bound_map)]
+
 use structopt::*;
 
 // TODO(shelbyd): Store combinators implement all store types.

@@ -4,6 +4,8 @@ use async_raft::{error::*, raft::*, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 
+mod openraft_storage;
+
 mod raft;
 use raft::*;
 
