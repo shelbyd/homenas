@@ -9,6 +9,8 @@ set +e
 
 killall homenas
 
+rm -r /tmp/.homenas_state
+
 DIR_A="/tmp/homenas_a"
 DIR_B="/tmp/homenas_b"
 DIR_C="/tmp/homenas_c"

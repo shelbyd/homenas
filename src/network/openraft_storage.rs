@@ -32,6 +32,7 @@ pub enum LogEntry {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum LogEntryResponse {
+    RaftOp,
     SetKV,
     CompareAndSwap(std::result::Result<(), ()>),
 }
@@ -150,15 +151,20 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStor
         &self,
         entries: &[&Entry<LogEntry>],
     ) -> Result<Vec<LogEntryResponse>> {
+        let mut result = Vec::new();
+
         for &entry in entries {
             match &entry.payload {
-                EntryPayload::Blank => {}
+                EntryPayload::Blank => {
+                    result.push(LogEntryResponse::RaftOp);
+                }
                 EntryPayload::Membership(membership) => {
                     let mut lock = self.state.lock().await;
                     lock.membership = Some(EffectiveMembership {
                         membership: membership.clone(),
                         log_id: entry.log_id,
                     });
+                    result.push(LogEntryResponse::RaftOp);
                 }
 
                 unhandled => {
@@ -169,14 +175,16 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStor
             self.state.lock().await.last_applied_id = Some(entry.log_id);
         }
 
-        Ok(Vec::new())
+        Ok(result)
     }
 
     async fn build_snapshot(&self) -> Result<Snapshot<File>> {
+        log::warn!("Unimplemented: build_snapshot");
         unimplemented!("build_snapshot");
     }
 
     async fn begin_receiving_snapshot(&self) -> Result<Box<File>> {
+        log::warn!("Unimplemented: begin_receiving_snapshot");
         unimplemented!("begin_receiving_snapshot");
     }
 
@@ -189,7 +197,8 @@ impl<T: Tree + 'static> RaftStorage<LogEntry, LogEntryResponse> for OpenRaftStor
     }
 
     async fn get_current_snapshot(&self) -> Result<Option<Snapshot<File>>> {
-        unimplemented!("get_current_snapshot");
+        log::warn!("Unimplemented: get_current_snapshot");
+        Ok(None)
     }
 }
 

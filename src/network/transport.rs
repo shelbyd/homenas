@@ -265,10 +265,19 @@ async fn initial_handshake(
 impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
     async fn send_append_entries(
         &self,
-        _target: u64,
-        _rpc: openraft::AppendEntriesRequest<openraft_storage::LogEntry>,
+        target: u64,
+        rpc: openraft::AppendEntriesRequest<openraft_storage::LogEntry>,
     ) -> Result<openraft::AppendEntriesResponse> {
-        unimplemented!("send_append_entries");
+        let resp = self
+            .request(target, Request::Raft(RaftRequest::AppendEntries(rpc)))
+            .await?;
+
+        match resp {
+            Response::Raft(RaftResponse::AppendEntries(r)) => Ok(r),
+            unhandled => {
+                anyhow::bail!("Unexpected response: {:?}", unhandled);
+            }
+        }
     }
 
     async fn send_install_snapshot(
@@ -281,9 +290,18 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
 
     async fn send_vote(
         &self,
-        _target: u64,
-        _rpc: openraft::types::v070::VoteRequest,
+        target: u64,
+        rpc: openraft::types::v070::VoteRequest,
     ) -> Result<openraft::types::v070::VoteResponse> {
-        unimplemented!("send_vote");
+        let resp = self
+            .request(target, Request::Raft(RaftRequest::Vote(rpc)))
+            .await?;
+
+        match resp {
+            Response::Raft(RaftResponse::Vote(r)) => Ok(r),
+            unhandled => {
+                anyhow::bail!("Unexpected response: {:?}", unhandled);
+            }
+        }
     }
 }
