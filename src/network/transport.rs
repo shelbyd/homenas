@@ -94,11 +94,16 @@ impl Transport {
         });
 
         let listener = Arc::clone(&transport);
-        tokio::task::spawn(async move { log_err!(listener.listener(listen_on).await) });
+        tokio::task::spawn(async move {
+            if let Err(e) = listener.listener(listen_on).await {
+                log::error!("Listener failed: {}", e);
+            }
+            log::info!("Listener task terminated");
+        });
 
         for peer_addr in peers {
             let result = async {
-                let stream = TcpStream::connect(peer_addr).await?;
+                let stream = try_connect_for(Duration::from_secs(2), *peer_addr).await?;
                 initial_handshake(node_id, stream, *peer_addr).await
             }
             .await;
@@ -124,20 +129,24 @@ impl Transport {
             .to_socket_addrs()?
             .next()
             .unwrap();
-        log::info!("Listening for peers on {}", listen_addr);
 
         let listener = TcpListener::bind(listen_addr).await?;
-        loop {
-            let (socket, addr) = listener.accept().await?;
+        log::info!("Listening for peers on {}", listen_addr);
 
-            let clone = Arc::clone(&self);
-            tokio::task::spawn(async move {
-                if let Some((peer, receive)) =
-                    log_err!(initial_handshake(clone.node_id, socket, addr).await)
-                {
-                    clone.new_peer_connected(peer, receive);
-                }
-            });
+        loop {
+            log::info!("Waiting for new incoming connection");
+            if let Some((socket, addr)) = log_err!(listener.accept().await) {
+                log::info!("Incoming connection from {}", addr);
+
+                let clone = Arc::clone(&self);
+                tokio::task::spawn(async move {
+                    if let Some((peer, receive)) =
+                        log_err!(initial_handshake(clone.node_id, socket, addr).await)
+                    {
+                        clone.new_peer_connected(peer, receive);
+                    }
+                });
+            }
         }
     }
 
@@ -156,10 +165,12 @@ impl Transport {
             .ok();
 
             loop {
-                let message = match log_err!(receive.try_next().await) {
+                let message = match log_err!(dbg!(receive.try_next().await)) {
                     Some(Some(m)) => m,
                     _ => break,
                 };
+
+                log::info!("Message from peer {}: {:?}", addr, message);
 
                 match message {
                     Message::RequestNodeId | Message::NodeId(_) => {
@@ -183,7 +194,7 @@ impl Transport {
                 }
             }
 
-            log::warn!("Closing stream with peer: {}", addr);
+            log::warn!("Lost connection to peer: {}", addr);
             self.peers.remove(&peer_id);
             self.send_application_request(Request::Raft(RaftRequest::ChangeMembership(
                 self.raft_members(),
@@ -225,6 +236,29 @@ impl Transport {
     }
 }
 
+async fn try_connect_for(dur: Duration, addr: SocketAddr) -> Result<TcpStream> {
+    log::info!(
+        "Trying to connect to {} with timeout {}s",
+        addr,
+        dur.as_secs_f32()
+    );
+
+    let start = Instant::now();
+
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(_) if start.elapsed() < dur => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(e) => {
+                log::warn!("Failed to connect to peer {}", addr);
+                return Err(e.into());
+            }
+        }
+    }
+}
+
 async fn initial_handshake(
     my_node_id: NodeId,
     stream: TcpStream,
@@ -233,17 +267,18 @@ async fn initial_handshake(
     log::info!("Attempting initial handshake with {}", addr);
     let do_connect = async {
         let codec = tokio_serde_cbor::Codec::<Message, Message>::new();
-        let mut stream = codec.framed(stream);
+        let stream = codec.framed(stream);
+        let (mut send, mut receive) = stream.split();
 
-        stream.send(Message::RequestNodeId).await?;
+        send.send(Message::RequestNodeId).await?;
 
-        while let Some(message) = stream.try_next().await? {
+
+        while let Some(message) = receive.try_next().await? {
             match message {
                 Message::RequestNodeId => {
-                    stream.send(Message::NodeId(my_node_id)).await?;
+                    send.send(Message::NodeId(my_node_id)).await?;
                 }
                 Message::NodeId(node_id) => {
-                    let (send, receive) = stream.split();
                     return anyhow::Ok((
                         Peer {
                             node_id,
@@ -276,6 +311,8 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
         target: u64,
         rpc: openraft::AppendEntriesRequest<openraft_storage::LogEntry>,
     ) -> Result<openraft::AppendEntriesResponse> {
+        log::warn!("send_append_entries: {:?}", rpc);
+
         let resp = self
             .request(target, Request::Raft(RaftRequest::AppendEntries(rpc)))
             .await?;
@@ -293,6 +330,8 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
         _target: u64,
         _rpc: openraft::types::v070::InstallSnapshotRequest,
     ) -> Result<openraft::types::v070::InstallSnapshotResponse> {
+        // log::warn!("send_install_snapshot: {:?}", _rpc);
+
         unimplemented!("send_install_snapshot");
     }
 
@@ -301,6 +340,8 @@ impl openraft::RaftNetwork<openraft_storage::LogEntry> for Transport {
         target: u64,
         rpc: openraft::types::v070::VoteRequest,
     ) -> Result<openraft::types::v070::VoteResponse> {
+        log::warn!("send_vote: {:?}", rpc);
+
         let resp = self
             .request(target, Request::Raft(RaftRequest::Vote(rpc)))
             .await?;

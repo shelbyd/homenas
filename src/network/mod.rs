@@ -35,14 +35,21 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
         let sled = sled::open(state_dir)?;
 
         let node_id = sled
-            .get("node_id")?
-            .map(crate::from_slice)
-            .unwrap_or(Ok(rand::random()))?;
+            .update_and_fetch("node_id", |existing| {
+                Some(
+                    opt_vec(existing)
+                        .unwrap_or_else(|| crate::to_vec::<u64>(&rand::random()).unwrap()),
+                )
+            })?
+            .unwrap();
+        let node_id = crate::from_slice(&node_id)?;
+        log::info!("Current raft id: {}", node_id);
 
         let (raft_request_tx, raft_request_rx) = mpsc::channel(32);
 
         let transport = Transport::create(node_id, listen_on, peers, raft_request_tx).await?;
         let members = transport.raft_members();
+        log::info!("Raft members: {:?}", members);
 
         let raft = Raft::new(
             node_id,
@@ -50,7 +57,14 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
             Arc::clone(&transport),
             Arc::new(OpenRaftStore::new(sled, backing_tree.clone())?),
         );
-        raft.initialize(members).await?;
+
+        match raft.initialize(members.clone()).await {
+            Ok(()) => {}
+            Err(InitializeError::NotAllowed) => {
+                raft.change_membership(members, false).await?;
+            }
+            Err(InitializeError::Fatal(e)) => anyhow::bail!(e),
+        }
 
         tokio::task::spawn(monitor_raft_metrics(raft.metrics()));
 
@@ -240,11 +254,18 @@ async fn monitor_raft_metrics(
 ) -> anyhow::Result<()> {
     let mut prev = metrics.borrow().clone();
 
+    log::info!("Initial metrics");
+    log::info!("  current_leader: {:?}", prev.current_leader);
+    log::info!(
+        "  membership: {:?}",
+        prev.membership_config.membership.all_nodes()
+    );
+
     loop {
         metrics.changed().await?;
         let new = metrics.borrow().clone();
 
-        if let Some((prev, new)) = diff(new.current_leader, prev.current_leader) {
+        if let Some((prev, new)) = diff(prev.current_leader, new.current_leader) {
             log::info!("Leader change: {:?} -> {:?}", prev, new,);
         }
 
