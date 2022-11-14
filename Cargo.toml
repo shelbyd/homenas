@@ -49,6 +49,7 @@ features = [
 [dev-dependencies]
 env_logger = "0.9.3"
 lazy_static = "1.4.0"
+serial_test = "0.9.0"
 tempfile = "3.3.0"
 test-log = { version = "0.2.11", features = ["trace"] }
 tokio-stream = "0.1.11"

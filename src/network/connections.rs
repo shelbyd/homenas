@@ -110,6 +110,13 @@ where
             receivers: DashMap::default(),
         }
     }
+
+    pub fn active(&self) -> Vec<I> {
+        self.senders
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
