@@ -693,6 +693,7 @@ dependencies = [
  "tokio",
  "tokio-serde",
  "tokio-serde-cbor",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -1519,6 +1520,17 @@ dependencies = [
  "serde",
  "serde_cbor",
  "tokio-util",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d660770404473ccd7bc9f8b28494a811bc18542b915c0855c51e8f419d5223ce"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

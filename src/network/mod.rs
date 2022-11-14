@@ -4,6 +4,8 @@ use openraft::{error::*, raft::*, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 
+mod connections;
+
 mod openraft_storage;
 use openraft_storage::*;
 
