@@ -3,6 +3,7 @@ use futures::{future::*, *};
 use std::{hash::Hash, pin::Pin, task::Poll};
 use tokio::sync::Mutex;
 
+// TODO(shelbyd): Move dyn to Cluster.
 type MStream<M> = Pin<Box<dyn Stream<Item = M> + Send + Sync>>;
 type MSink<M, E> = Pin<Box<dyn Sink<M, Error = E> + Send + Sync>>;
 
