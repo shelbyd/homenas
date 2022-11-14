@@ -61,8 +61,7 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
         match raft.initialize(members.clone()).await {
             Ok(()) => {}
             Err(InitializeError::NotAllowed) => {
-                log::info!("Got not allowed, trying to change_membership");
-                // raft.change_membership(members, false).await?;
+                log::info!("Got not allowed, cluster should be running");
             }
             Err(InitializeError::Fatal(e)) => anyhow::bail!(e),
         }
@@ -156,7 +155,7 @@ fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
                         )),
                         Request::Raft(RaftRequest::ChangeMembership(members)) => {
                             log::info!("Changing membership: {:?}", members);
-                            this.raft.change_membership(members, false).await?;
+                            this.raft.change_membership(members, true).await?;
                             Ok(Response::Raft(RaftResponse::ChangeMembership))
                         }
                         Request::Raft(RaftRequest::AppendEntries(req)) => {
