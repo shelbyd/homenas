@@ -3,10 +3,16 @@ use super::{connections::Event as ConnectionEvent, *};
 use ::futures::*;
 use dashmap::*;
 use serde::{de::DeserializeOwned, *};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::{
+    collections::BTreeMap,
+    net::{Ipv4Addr, SocketAddr},
+};
 use tokio::{
     net::*,
-    sync::{mpsc::unbounded_channel, oneshot},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedSender},
+        oneshot, Mutex,
+    },
     task::*,
 };
 use tokio_serde_cbor::Codec;
@@ -16,17 +22,23 @@ use tokio_util::codec::*;
 type RequestId = u64;
 
 pub struct Cluster<N, R> {
-    connections: Connections<NodeId, Message<N, R>, tokio_serde_cbor::Error>,
+    pub node_id: NodeId,
 
-    tasks: Vec<JoinHandle<()>>,
+    connections: Connections<NodeId, SocketAddr, Message<N, R>, tokio_serde_cbor::Error>,
+
     pending_requests: DashMap<(NodeId, RequestId), oneshot::Sender<Vec<u8>>>,
+    peers: Mutex<BTreeMap<NodeId, SocketAddr>>,
+
+    handshake_tx: UnboundedSender<(SocketAddr, Option<TcpStream>)>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 enum Message<N, R> {
     Notification(N),
     Request(RequestId, R),
     Response(RequestId, Vec<u8>),
+
+    KnownPeers(BTreeMap<NodeId, SocketAddr>),
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -40,14 +52,13 @@ pub enum Event<N, R> {
 #[derive(Deserialize, Serialize)]
 struct Handshake {
     my_id: NodeId,
-
-    // TODO(shelbyd): Add.
-    // peers: BTreeMap<NodeId, SocketAddr>,
+    listening_on: u16,
 }
 
 struct HandshakeSuccess {
     stream: TcpStream,
     handshake: Handshake,
+    peer_addr: SocketAddr,
 }
 
 impl<N, R> Cluster<N, R>
@@ -55,27 +66,28 @@ where
     N: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
     R: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub async fn new(
         node_id: NodeId,
         listen_on: u16,
         initial_peers: &[SocketAddr],
-    ) -> Result<Self, std::io::Error> {
-        let mut tasks = Vec::new();
-
+    ) -> anyhow::Result<Self> {
         let listen_addr = (Ipv4Addr::UNSPECIFIED, listen_on);
         let listener = TcpListener::bind(listen_addr).await?;
 
         let (handshake_tx, mut handshake_rx) = unbounded_channel();
 
         for peer in initial_peers {
-            handshake_tx.send((*peer, None));
+            handshake_tx.send((*peer, None))?;
         }
 
+        let handshake_new = handshake_tx.clone();
         spawn(async move {
+            log::info!("{}: Starting listener", node_id);
             while let Some((socket, addr)) = log_err!(listener.accept().await) {
-                handshake_tx.send((addr, Some(socket)));
+                log_err!(handshake_new.send((addr, Some(socket))));
             }
+            log::error!("{}: Listener terminated", node_id);
         });
 
         let (conn_tx, conn_rx) = unbounded_channel();
@@ -83,9 +95,13 @@ where
 
         spawn(async move {
             while let Some((addr, socket)) = handshake_rx.recv().await {
+                log::info!("{}: Trying handshake with {}", node_id, addr);
                 let conn_tx = conn_tx.clone();
                 spawn(async move {
-                    let outgoing = Handshake { my_id: node_id };
+                    let outgoing = Handshake {
+                        my_id: node_id,
+                        listening_on: listen_on,
+                    };
 
                     let success = match log_err!(handshake(addr, socket, outgoing).await) {
                         None => return,
@@ -95,23 +111,43 @@ where
                     let (send, recv) = Codec::new().framed(success.stream).split();
                     let recv = recv.filter_map(|result| async move { log_err!(result) });
 
-                    conn_tx.send((success.handshake.my_id, send, recv));
+                    let mut peer_addr = success.peer_addr;
+                    peer_addr.set_port(success.handshake.listening_on);
+
+                    log_err!(conn_tx.send((success.handshake.my_id, peer_addr, send, recv)));
+
+                    log::info!(
+                        "{}: Successfully connected to {}",
+                        node_id,
+                        success.handshake.my_id
+                    );
                 });
             }
         });
 
         Ok(Cluster {
+            node_id,
             connections,
-            tasks,
             pending_requests: DashMap::default(),
+            peers: Mutex::default(),
+            handshake_tx,
         })
     }
 
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub async fn next_event(&self) -> Event<N, R> {
         loop {
             return match self.connections.next_event().await {
-                ConnectionEvent::NewConnection(id) => Event::NewConnection(id),
+                ConnectionEvent::NewConnection(id, addr) => {
+                    let mut peers = self.peers.lock().await;
+                    peers.insert(id, addr);
+                    let peers = peers.clone();
+
+                    log::info!("{}: Broadcasting new peers: {:?}", self.node_id, peers);
+                    log_err!(self.broadcast_internal(Message::KnownPeers(peers)).await);
+
+                    Event::NewConnection(id)
+                }
                 ConnectionEvent::Message(id, Message::Notification(n)) => {
                     Event::Notification(id, n)
                 }
@@ -126,26 +162,43 @@ where
                             continue;
                         }
                     };
-                    responder.1.send(response);
+                    if let Err(_) = responder.1.send(response) {
+                        log::error!("{}: Failed to deliver response to request {}", id, req_id);
+                    }
                     continue;
                 }
                 ConnectionEvent::Dropped(id) => Event::Dropped(id),
+                ConnectionEvent::Message(_, Message::KnownPeers(peers)) => {
+                    log::info!("{}: Received new peers: {:?}", self.node_id, peers);
+                    let known_here = self.peers.lock().await;
+
+                    for (id, addr) in peers {
+                        if id != self.node_id && !known_here.contains_key(&id) {
+                            log::info!("{}: Connecting to new peer {}", self.node_id, addr);
+                            log_err!(self.handshake_tx.send((addr, None)));
+                        }
+                    }
+                    continue;
+                }
             };
         }
     }
 
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub async fn broadcast(&self, notification: N) -> anyhow::Result<()> {
+        self.broadcast_internal(Message::Notification(notification))
+            .await
+    }
+
+    async fn broadcast_internal(&self, message: Message<N, R>) -> anyhow::Result<()> {
         for id in self.connections.active() {
-            self.connections
-                .send_to(&id, Message::Notification(notification.clone()))
-                .await?;
+            self.connections.send_to(&id, message.clone()).await?;
         }
 
         Ok(())
     }
 
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub async fn request<Res>(&self, id: NodeId, req: R) -> anyhow::Result<Res>
     where
         Res: DeserializeOwned,
@@ -164,7 +217,7 @@ where
         Ok(obj)
     }
 
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub async fn respond<Res>(&self, id: NodeId, request_id: u64, res: Res) -> anyhow::Result<()>
     where
         Res: Serialize,
@@ -173,14 +226,6 @@ where
             .send_to(&id, Message::Response(request_id, crate::to_vec(&res)?))
             .await?;
         Ok(())
-    }
-}
-
-impl<N, R> Drop for Cluster<N, R> {
-    fn drop(&mut self) {
-        for task in &self.tasks {
-            task.abort();
-        }
     }
 }
 
@@ -206,8 +251,11 @@ async fn handshake(
         Some(hs) => hs?,
     };
 
+    let raw = connection.into_inner();
+
     Ok(HandshakeSuccess {
-        stream: connection.into_inner(),
+        peer_addr: raw.peer_addr()?,
+        stream: raw,
         handshake: incoming,
     })
 }
@@ -247,7 +295,14 @@ mod tests {
     }
 
     async fn timeout_event(cluster: &Cluster) -> Result<Event, Elapsed> {
-        timeout(Duration::from_millis(10), cluster.next_event()).await
+        timeout(TEN_MS, cluster.next_event()).await
+    }
+
+    async fn loop_events(cluster: Cluster) {
+        while let Ok(_) = timeout(Duration::from_millis(100), cluster.next_event()).await {
+            // Tests are too eager about polling first cluster without a sleep.
+            sleep(Duration::from_micros(100)).await;
+        }
     }
 
     #[tokio::test]
@@ -345,22 +400,22 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    #[ignore]
     async fn connects_to_new_through_first() {
-        let first_port = 42000;
+        let first_port = 42001;
 
-        let first = Cluster::new(42, first_port, &[]).await.unwrap();
-        let second = Cluster::new(43, 42001, &[localhost(first_port)])
+        let first = Cluster::new(1, first_port, &[]).await.unwrap();
+        spawn(loop_events(first));
+
+        let second = Cluster::new(2, 42002, &[localhost(first_port)])
             .await
             .unwrap();
-        let last = Cluster::new(44, 42002, &[localhost(first_port)])
+        spawn(loop_events(second));
+
+        let last = Cluster::new(3, 42003, &[localhost(first_port)])
             .await
             .unwrap();
 
-        drain_events(&first).await;
-        drain_events(&second).await;
-
-        assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(42)));
-        assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(44)));
+        assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(1)));
+        assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(2)));
     }
 }

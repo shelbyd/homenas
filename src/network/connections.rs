@@ -6,57 +6,65 @@ use tokio::sync::Mutex;
 type MStream<M> = Pin<Box<dyn Stream<Item = M> + Send + Sync>>;
 type MSink<M, E> = Pin<Box<dyn Sink<M, Error = E> + Send + Sync>>;
 
-pub struct Connections<I: Send + Sync, M, E> {
-    new_connections: Mutex<Pin<Box<dyn Stream<Item = (I, MSink<M, E>, MStream<M>)> + Send + Sync>>>,
+pub struct Connections<I: Send + Sync, D: Send + Sync, M, E> {
+    new_connections:
+        Mutex<Pin<Box<dyn Stream<Item = (I, D, MSink<M, E>, MStream<M>)> + Send + Sync>>>,
     receivers: DashMap<I, MStream<M>>,
     senders: DashMap<I, MSink<M, E>>,
+    peer_data: DashMap<I, D>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Event<I, M> {
-    NewConnection(I),
+pub enum Event<I, D, M> {
+    NewConnection(I, D),
     Dropped(I),
     Message(I, M),
 }
 
-impl<I, M, E> Connections<I, M, E>
+impl<I, D, M, E> Connections<I, D, M, E>
 where
     I: Clone + Hash + Eq + Send + Sync + 'static,
+    D: Clone + Send + Sync + 'static,
     M: 'static,
     E: 'static,
 {
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub fn new<S, Inc, Out>(new_connections: S) -> Self
     where
-        S: Stream<Item = (I, Out, Inc)> + Send + Sync + 'static,
+        S: Stream<Item = (I, D, Out, Inc)> + Send + Sync + 'static,
         Out: Sink<M, Error = E> + Send + Sync + 'static,
         Inc: Stream<Item = M> + Send + Sync + 'static,
     {
         Connections {
-            new_connections: Mutex::new(Box::pin(new_connections.map(|(id, sink, stream)| {
-                (
-                    id,
-                    Box::pin(sink) as MSink<M, E>,
-                    Box::pin(stream) as MStream<M>,
-                )
-            }))),
+            new_connections: Mutex::new(Box::pin(new_connections.map(
+                |(id, data, sink, stream)| {
+                    (
+                        id,
+                        data,
+                        Box::pin(sink) as MSink<M, E>,
+                        Box::pin(stream) as MStream<M>,
+                    )
+                },
+            ))),
             senders: DashMap::default(),
             receivers: DashMap::default(),
+            peer_data: DashMap::default(),
         }
     }
 
-    #[allow(unused)]
-    pub async fn next_event(&self) -> Event<I, M> {
+    #[allow(dead_code)]
+    pub async fn next_event(&self) -> Event<I, D, M> {
         let mut connections = self.new_connections.lock().await;
 
         let event = poll_fn(|cx| {
             match (*connections).as_mut().poll_next(cx) {
                 Poll::Pending => {}
                 Poll::Ready(None) => unreachable!("incoming connections closed unexpectedly"),
-                Poll::Ready(Some((id, send, recv))) => {
+                Poll::Ready(Some((id, data, send, recv))) => {
                     self.receivers.insert(id.clone(), recv);
                     self.senders.insert(id.clone(), send);
-                    return Poll::Ready(Event::NewConnection(id));
+                    self.peer_data.insert(id.clone(), data.clone());
+                    return Poll::Ready(Event::NewConnection(id, data));
                 }
             }
 
@@ -83,23 +91,24 @@ where
         event
     }
 
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub async fn send_to(&self, id: &I, message: M) -> Result<(), E> {
-        self.senders
+        let mut sender = self
+            .senders
             .get_mut(id)
-            .expect("called send_to on missing id")
-            .send(message)
-            .await
+            .expect("called send_to on missing id");
+        sender.send(message).await
     }
 
     #[cfg(test)]
-    fn insert<S, R>(&self, id: I, (send, recv): (S, R))
+    fn insert<S, R>(&self, id: I, (data, send, recv): (D, S, R))
     where
         R: Stream<Item = M> + Send + Sync + 'static,
         S: Sink<M, Error = E> + Send + Sync + 'static,
     {
         self.receivers.insert(id.clone(), Box::pin(recv));
-        self.senders.insert(id, Box::pin(send));
+        self.senders.insert(id.clone(), Box::pin(send));
+        self.peer_data.insert(id, data);
     }
 
     #[cfg(test)]
@@ -108,6 +117,7 @@ where
             new_connections: Mutex::new(Box::pin(futures::stream::pending())),
             senders: DashMap::default(),
             receivers: DashMap::default(),
+            peer_data: DashMap::default(),
         }
     }
 
@@ -140,12 +150,12 @@ mod tests {
         let subject = Connections::new(UnboundedReceiverStream::new(connection_stream));
 
         connection_sink
-            .send(("foo", drain::<()>(), pending()))
+            .send(("foo", "bar", drain::<()>(), pending()))
             .unwrap();
 
         assert_eq!(
             timeout(TEN_MS, subject.next_event()).await,
-            Ok(Event::NewConnection("foo"))
+            Ok(Event::NewConnection("foo", "bar"))
         );
     }
 
@@ -156,7 +166,7 @@ mod tests {
         let (message_sink, message_stream) = unbounded_channel();
         subject.insert(
             "foo",
-            (drain(), UnboundedReceiverStream::new(message_stream)),
+            ((), drain(), UnboundedReceiverStream::new(message_stream)),
         );
 
         message_sink.send("a message").unwrap();
@@ -173,7 +183,7 @@ mod tests {
         let (message_sink, message_stream) = unbounded_channel::<()>();
         subject.insert(
             "foo",
-            (drain(), UnboundedReceiverStream::new(message_stream)),
+            ((), drain(), UnboundedReceiverStream::new(message_stream)),
         );
 
         drop(message_sink);
@@ -190,7 +200,7 @@ mod tests {
         let (message_sink, message_stream) = unbounded_channel::<()>();
         subject.insert(
             "foo",
-            (drain(), UnboundedReceiverStream::new(message_stream)),
+            ((), drain(), UnboundedReceiverStream::new(message_stream)),
         );
 
         drop(message_sink);
@@ -207,7 +217,7 @@ mod tests {
         let subject = Connections::no_connections();
 
         let (message_sink, mut message_stream) = channel(42);
-        subject.insert("foo", (PollSender::new(message_sink), pending()));
+        subject.insert("foo", ((), PollSender::new(message_sink), pending()));
 
         subject.send_to(&"foo", 123).await.unwrap();
         assert_eq!(
@@ -221,7 +231,7 @@ mod tests {
         let subject = Connections::no_connections();
 
         let (message_sink, mut message_stream) = channel(42);
-        subject.insert("foo", (PollSender::new(message_sink), pending()));
+        subject.insert("foo", ((), PollSender::new(message_sink), pending()));
 
         let subject = Arc::new(subject);
 
