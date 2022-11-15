@@ -68,6 +68,19 @@ macro_rules! log_err {
     }};
 }
 
+#[macro_export]
+macro_rules! just_log {
+    ($expr:expr) => {{
+        match $expr {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                log::error!("{}", e);
+                Err(e)
+            }
+        }
+    }};
+}
+
 pub fn diff<T: PartialEq>(a: T, b: T) -> Option<(T, T)> {
     if a == b {
         None

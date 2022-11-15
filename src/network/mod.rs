@@ -13,9 +13,6 @@ use connections::*;
 mod openraft_storage;
 use openraft_storage::*;
 
-mod transport;
-pub use transport::*;
-
 type HomeNasRaft<T> = Raft<LogEntry, LogEntryResponse, RaftTransport, OpenRaftStore<T>>;
 
 pub struct NetworkStore<T: Tree + 'static, C> {
@@ -30,7 +27,6 @@ enum StrongRead {
     ForwardTo(NodeId),
 }
 
-// TODO(shelbyd): Rename.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 enum Event {}
 
@@ -156,15 +152,8 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
 
         let leader = self.get_leader(maybe_leader).await?;
 
-        match log_err!(self.cluster.request(leader, Request::Write(write)).await)
+        log_err!(self.cluster.request(leader, Request::Write(write)).await)
             .ok_or(IoError::Internal)?
-        {
-            Response::Write(r) => Ok(r),
-            unexpected => {
-                log::error!("Unexpected response: {:?}", unexpected);
-                Err(IoError::Internal)
-            }
-        }
     }
 
     async fn handle_cluster_events(self: Arc<Self>) {
@@ -185,9 +174,15 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
     ) -> anyhow::Result<()> {
         let (peer_id, req_id, request) = match event {
             ClusterEvent::NewConnection(_) | ClusterEvent::Dropped(_) => {
-                self.raft
-                    .change_membership(self.cluster.members(), false)
-                    .await?;
+                match self
+                    .raft
+                    .change_membership(self.cluster.members(), true)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(ClientWriteError::ForwardToLeader(_)) => {}
+                    Err(e) => anyhow::bail!(e),
+                };
                 return Ok(());
             }
             ClusterEvent::Request(peer_id, req_id, request) => (peer_id, req_id, request),
@@ -372,6 +367,10 @@ impl RaftNetwork<LogEntry> for RaftTransport {
         self.0
             .request(target, Request::Raft(RaftRequest::AppendEntries(rpc)))
             .await
+            .map_err(|e| {
+                log::error!("Error performing Raft AppendEntries: {}", e);
+                e
+            })
     }
 
     async fn send_install_snapshot(
@@ -382,11 +381,19 @@ impl RaftNetwork<LogEntry> for RaftTransport {
         self.0
             .request(target, Request::Raft(RaftRequest::InstallSnapshot(rpc)))
             .await
+            .map_err(|e| {
+                log::error!("Error performing Raft InstallSnapshot: {}", e);
+                e
+            })
     }
 
     async fn send_vote(&self, target: NodeId, rpc: VoteRequest) -> anyhow::Result<VoteResponse> {
         self.0
             .request(target, Request::Raft(RaftRequest::Vote(rpc)))
             .await
+            .map_err(|e| {
+                log::error!("Error performing Raft Vote: {}", e);
+                e
+            })
     }
 }

@@ -94,6 +94,8 @@ where
 
         if let Event::Dropped(id) = &event {
             self.receivers.remove(id);
+            self.senders.remove(id);
+            self.peer_data.remove(id);
         }
 
         event

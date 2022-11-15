@@ -154,6 +154,10 @@ where
 
                     Event::NewConnection(id)
                 }
+                ConnectionEvent::Dropped(id) => {
+                    self.peers.lock().await.remove(&id);
+                    Event::Dropped(id)
+                }
                 ConnectionEvent::Message(id, Message::Notification(n)) => {
                     Event::Notification(id, n)
                 }
@@ -173,7 +177,6 @@ where
                     }
                     continue;
                 }
-                ConnectionEvent::Dropped(id) => Event::Dropped(id),
                 ConnectionEvent::Message(_, Message::Internal(Internal::KnownPeers(peers))) => {
                     log::info!("{}: Received new peers: {:?}", self.node_id, peers);
                     let known_here = self.peers.lock().await;
@@ -242,7 +245,11 @@ where
     }
 
     pub fn members(&self) -> BTreeSet<NodeId> {
-        self.connections.active().into_iter().collect()
+        self.connections
+            .active()
+            .into_iter()
+            .chain([self.node_id])
+            .collect()
     }
 }
 
@@ -308,7 +315,9 @@ mod tests {
     type Event = super::Event<TestNotification, TestRequest>;
 
     async fn drain_events(cluster: &Cluster) {
-        while let Ok(_) = timeout_event(cluster).await {}
+        while let Ok(event) = timeout_event(cluster).await {
+            log::info!("Received event: {:?}", event);
+        }
     }
 
     async fn timeout_event(cluster: &Cluster) -> Result<Event, Elapsed> {
@@ -436,5 +445,18 @@ mod tests {
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(2)));
     }
 
-    // Dropped removes from ::members
+    #[tokio::test]
+    #[serial]
+    async fn dropped_removes_from_members() {
+        let first = Cluster::new(42, 42000, &[]).await.unwrap();
+        let second = Cluster::new(43, 42001, &[localhost(42000)]).await.unwrap();
+        drain_events(&first).await;
+        drain_events(&second).await;
+
+        drop(second);
+
+        drain_events(&first).await;
+
+        assert!(!first.members().contains(&43));
+    }
 }
