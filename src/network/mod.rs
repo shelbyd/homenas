@@ -1,10 +1,11 @@
 use crate::{chunk_store::*, db::*, io::*, log_err, utils::*};
 
 use openraft::{error::*, raft::*, *};
-use std::{net::SocketAddr, path::Path, sync::Arc};
-use tokio::sync::{mpsc, oneshot};
+use serde::*;
+use std::{collections::*, net::SocketAddr, path::Path, sync::Arc};
 
 mod cluster;
+use cluster::{Event as ClusterEvent, *};
 
 mod connections;
 use connections::*;
@@ -15,16 +16,39 @@ use openraft_storage::*;
 mod transport;
 pub use transport::*;
 
+type HomeNasRaft<T> = Raft<LogEntry, LogEntryResponse, RaftTransport, OpenRaftStore<T>>;
+
 pub struct NetworkStore<T: Tree + 'static, C> {
     backing_tree: T,
     backing_chunks: C,
     raft: HomeNasRaft<T>,
-    transport: Arc<Transport>,
+    cluster: Arc<Cluster<Event, Request>>,
 }
 
 enum StrongRead {
     Ok,
     ForwardTo(NodeId),
+}
+
+// TODO(shelbyd): Rename.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+enum Event {}
+
+struct RaftTransport(Arc<Cluster<Event, Request>>);
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Request {
+    Raft(RaftRequest),
+    Get(String),
+    Write(openraft_storage::LogEntry),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RaftRequest {
+    Vote(openraft::types::v070::VoteRequest),
+    ChangeMembership(BTreeSet<NodeId>),
+    AppendEntries(openraft::AppendEntriesRequest<openraft_storage::LogEntry>),
+    InstallSnapshot(openraft::types::v070::InstallSnapshotRequest),
 }
 
 impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
@@ -50,15 +74,13 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
         let node_id = crate::from_slice(&node_id)?;
         log::info!("Current raft id: {}", node_id);
 
-        let (raft_request_tx, raft_request_rx) = mpsc::channel(32);
-
-        let transport = Transport::create(node_id, listen_on, peers, raft_request_tx).await?;
-        let members = transport.raft_members();
+        let cluster = Arc::new(Cluster::new(node_id, listen_on, peers).await?);
+        let members = cluster.members();
 
         let raft = Raft::new(
             node_id,
             Arc::new(Config::build(&["HomeNAS"])?),
-            Arc::clone(&transport),
+            Arc::new(RaftTransport(Arc::clone(&cluster))),
             Arc::new(OpenRaftStore::new(sled, backing_tree.clone())?),
         );
 
@@ -72,22 +94,23 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
         }
         log::info!("Raft initialized");
 
-        tokio::task::spawn(monitor_raft_metrics(raft.metrics()));
-
         let network_store = Arc::new(NetworkStore {
             backing_tree,
             backing_chunks,
-            raft,
-            transport,
+            raft: raft.clone(),
+            cluster,
         });
 
-        handle_app_requests(raft_request_rx, network_store.clone());
+        tokio::task::spawn(monitor_raft_metrics(raft.metrics()));
+
+        let event_listener = Arc::clone(&network_store);
+        tokio::task::spawn(async move { event_listener.handle_cluster_events().await });
 
         Ok(network_store)
     }
 }
 
-impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
+impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
     async fn strong_read(&self) -> IoResult<StrongRead> {
         let maybe_leader = match self.raft.client_read().await {
             Ok(()) => return Ok(StrongRead::Ok),
@@ -133,7 +156,7 @@ impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
 
         let leader = self.get_leader(maybe_leader).await?;
 
-        match log_err!(self.transport.request(leader, Request::Write(write)).await)
+        match log_err!(self.cluster.request(leader, Request::Write(write)).await)
             .ok_or(IoError::Internal)?
         {
             Response::Write(r) => Ok(r),
@@ -143,61 +166,111 @@ impl<C: ChunkStore, T: Tree> NetworkStore<T, C> {
             }
         }
     }
-}
 
-fn handle_app_requests<T: Tree + 'static, C: ChunkStore + 'static>(
-    mut receiver: mpsc::Receiver<(Request, oneshot::Sender<anyhow::Result<Response>>)>,
-    this: Arc<NetworkStore<T, C>>,
-) {
-    tokio::task::spawn(async move {
-        while let Some((req, response_tx)) = receiver.recv().await {
-            let this = Arc::clone(&this);
+    async fn handle_cluster_events(self: Arc<Self>) {
+        loop {
+            let event = self.cluster.next_event().await;
+            let clone = Arc::clone(&self);
             tokio::task::spawn(async move {
-                let resp: anyhow::Result<_> = async {
-                    match req {
-                        Request::Raft(RaftRequest::Vote(vote)) => Ok(Response::Raft(
-                            RaftResponse::Vote(this.raft.vote(vote).await?),
-                        )),
-                        Request::Raft(RaftRequest::ChangeMembership(members)) => {
-                            log::info!("Changing membership: {:?}", members);
-                            this.raft.change_membership(members, true).await?;
-                            Ok(Response::Raft(RaftResponse::ChangeMembership))
-                        }
-                        Request::Raft(RaftRequest::AppendEntries(req)) => {
-                            let resp = this.raft.append_entries(req).await?;
-                            Ok(Response::Raft(RaftResponse::AppendEntries(resp)))
-                        }
-                        Request::Get(key) => Ok(Response::Get(this.get(&key).await?)),
-                        Request::Write(req) => Ok(Response::Write(this.do_write(req).await?)),
-                    }
+                if let None = log_err!(clone.handle_cluster_event(event).await) {
+                    std::process::exit(1);
                 }
-                .await;
-                response_tx.send(resp).ok();
             });
         }
-    });
+    }
+
+    async fn handle_cluster_event(
+        &self,
+        event: ClusterEvent<Event, Request>,
+    ) -> anyhow::Result<()> {
+        let (peer_id, req_id, request) = match event {
+            ClusterEvent::NewConnection(_) | ClusterEvent::Dropped(_) => {
+                self.raft
+                    .change_membership(self.cluster.members(), false)
+                    .await?;
+                return Ok(());
+            }
+            ClusterEvent::Request(peer_id, req_id, request) => (peer_id, req_id, request),
+            unhandled => {
+                log::error!("Unhandled: {:?}", unhandled);
+                std::process::exit(1);
+            }
+        };
+
+        match request {
+            Request::Raft(RaftRequest::Vote(rpc)) => {
+                self.cluster
+                    .respond::<VoteResponse>(peer_id, req_id, self.raft.vote(rpc).await?)
+                    .await?;
+            }
+            Request::Raft(RaftRequest::AppendEntries(rpc)) => {
+                self.cluster
+                    .respond::<AppendEntriesResponse>(
+                        peer_id,
+                        req_id,
+                        self.raft.append_entries(rpc).await?,
+                    )
+                    .await?;
+            }
+            Request::Get(key) => {
+                self.cluster
+                    .respond::<Option<Vec<u8>>>(peer_id, req_id, self.get(&key).await?)
+                    .await?;
+            }
+            unhandled => {
+                log::error!("Unhandled: {:?}", unhandled);
+                std::process::exit(1);
+            }
+        }
+
+        Ok(())
+    }
 }
 
+// fn handle_cluster_events<T: Tree + 'static, C: ChunkStore + 'static>(
+//     this: Arc<NetworkStore<T, C>>,
+// ) {
+// tokio::task::spawn(async move {
+//     while let Some((req, response_tx)) = receiver.recv().await {
+//         let this = Arc::clone(&this);
+//         tokio::task::spawn(async move {
+//             let resp: anyhow::Result<_> = async {
+//                 match req {
+//                     Request::Raft(RaftRequest::Vote(vote)) => Ok(Response::Raft(
+//                         RaftResponse::Vote(this.raft.vote(vote).await?),
+//                     )),
+//                     Request::Raft(RaftRequest::ChangeMembership(members)) => {
+//                         log::info!("Changing membership: {:?}", members);
+//                         this.raft.change_membership(members, true).await?;
+//                         Ok(Response::Raft(RaftResponse::ChangeMembership))
+//                     }
+//                     Request::Raft(RaftRequest::AppendEntries(req)) => {
+//                         let resp = this.raft.append_entries(req).await?;
+//                         Ok(Response::Raft(RaftResponse::AppendEntries(resp)))
+//                     }
+//                     Request::Raft(RaftRequest::InstallSnapshot(_)) => unimplemented!(),
+//                     Request::Get(key) => Ok(Response::Get(this.get(&key).await?)),
+//                     Request::Write(req) => Ok(Response::Write(this.do_write(req).await?)),
+//                 }
+//             }
+//             .await;
+//             response_tx.send(resp).ok();
+//         });
+//     }
+// });
+// }
+
 #[async_trait::async_trait]
-impl<T: Tree, C: ChunkStore> Tree for NetworkStore<T, C> {
+impl<T: Tree, C: ChunkStore + 'static> Tree for NetworkStore<T, C> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
         match self.strong_read().await? {
             StrongRead::Ok => self.backing_tree.get(key).await,
-            StrongRead::ForwardTo(other) => {
-                match log_err!(
-                    self.transport
-                        .request(other, Request::Get(key.to_string()))
-                        .await
-                )
-                .ok_or(IoError::Internal)?
-                {
-                    Response::Get(data) => Ok(data),
-                    unexpected => {
-                        log::error!("Unexpected response: {:?}", unexpected);
-                        Err(IoError::Internal)
-                    }
-                }
-            }
+            StrongRead::ForwardTo(other) => log_err!(
+                self.cluster
+                    .request::<Option<Vec<u8>>>(other, Request::Get(key.to_string()))
+                    .await
+            )
+            .ok_or(IoError::Internal),
         }
     }
 
@@ -286,5 +359,34 @@ async fn monitor_raft_metrics(
         }
 
         prev = new;
+    }
+}
+
+#[openraft::async_trait::async_trait]
+impl RaftNetwork<LogEntry> for RaftTransport {
+    async fn send_append_entries(
+        &self,
+        target: NodeId,
+        rpc: AppendEntriesRequest<LogEntry>,
+    ) -> anyhow::Result<AppendEntriesResponse> {
+        self.0
+            .request(target, Request::Raft(RaftRequest::AppendEntries(rpc)))
+            .await
+    }
+
+    async fn send_install_snapshot(
+        &self,
+        target: NodeId,
+        rpc: InstallSnapshotRequest,
+    ) -> anyhow::Result<InstallSnapshotResponse> {
+        self.0
+            .request(target, Request::Raft(RaftRequest::InstallSnapshot(rpc)))
+            .await
+    }
+
+    async fn send_vote(&self, target: NodeId, rpc: VoteRequest) -> anyhow::Result<VoteResponse> {
+        self.0
+            .request(target, Request::Raft(RaftRequest::Vote(rpc)))
+            .await
     }
 }

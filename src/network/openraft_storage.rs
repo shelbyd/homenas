@@ -1,12 +1,10 @@
 use super::*;
 
 use openraft::{ErrorSubject::*, ErrorVerb::*, HardState, Snapshot};
-use serde::*;
 use std::{ops::RangeBounds, option::Option::None};
 use tokio::{fs::*, sync::Mutex};
 
 type Result<T> = std::result::Result<T, StorageError>;
-pub type HomeNasRaft<T> = Raft<LogEntry, LogEntryResponse, crate::Transport, OpenRaftStore<T>>;
 
 pub struct OpenRaftStore<T> {
     sled: sled::Db,

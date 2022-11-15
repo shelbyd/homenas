@@ -22,6 +22,15 @@ pub enum Event<I, D, M> {
     Message(I, M),
 }
 
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+pub enum SendError<I, E> {
+    #[error("no sender {0}")]
+    NoSender(I),
+
+    #[error("inner: {0}")]
+    Inner(#[from] E),
+}
+
 impl<I, D, M, E> Connections<I, D, M, E>
 where
     I: Clone + Hash + Eq + Send + Sync + 'static,
@@ -29,7 +38,6 @@ where
     M: 'static,
     E: 'static,
 {
-    #[allow(dead_code)]
     pub fn new<S, Inc, Out>(new_connections: S) -> Self
     where
         S: Stream<Item = (I, D, Out, Inc)> + Send + Sync + 'static,
@@ -53,7 +61,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub async fn next_event(&self) -> Event<I, D, M> {
         let mut connections = self.new_connections.lock().await;
 
@@ -92,13 +99,14 @@ where
         event
     }
 
-    #[allow(dead_code)]
-    pub async fn send_to(&self, id: &I, message: M) -> Result<(), E> {
+    pub async fn send_to(&self, id: &I, message: M) -> Result<(), SendError<I, E>> {
         let mut sender = self
             .senders
             .get_mut(id)
-            .expect("called send_to on missing id");
-        sender.send(message).await
+            .ok_or_else(|| SendError::NoSender(id.clone()))?;
+        sender.send(message).await?;
+
+        Ok(())
     }
 
     #[cfg(test)]

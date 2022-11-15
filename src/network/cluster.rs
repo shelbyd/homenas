@@ -2,9 +2,9 @@ use super::{connections::Event as ConnectionEvent, *};
 
 use ::futures::*;
 use dashmap::*;
-use serde::{de::DeserializeOwned, *};
+use serde::de::DeserializeOwned;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{Ipv4Addr, SocketAddr},
 };
 use tokio::{
@@ -14,6 +14,7 @@ use tokio::{
         oneshot, Mutex,
     },
     task::*,
+    time::*,
 };
 use tokio_serde_cbor::Codec;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -38,6 +39,11 @@ enum Message<N, R> {
     Request(RequestId, R),
     Response(RequestId, Vec<u8>),
 
+    Internal(Internal),
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+enum Internal {
     KnownPeers(BTreeMap<NodeId, SocketAddr>),
 }
 
@@ -64,7 +70,7 @@ struct HandshakeSuccess {
 impl<N, R> Cluster<N, R>
 where
     N: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
-    R: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     #[allow(dead_code)]
     pub async fn new(
@@ -144,7 +150,7 @@ where
                     let peers = peers.clone();
 
                     log::info!("{}: Broadcasting new peers: {:?}", self.node_id, peers);
-                    log_err!(self.broadcast_internal(Message::KnownPeers(peers)).await);
+                    log_err!(self.broadcast_internal(Internal::KnownPeers(peers)).await);
 
                     Event::NewConnection(id)
                 }
@@ -168,7 +174,7 @@ where
                     continue;
                 }
                 ConnectionEvent::Dropped(id) => Event::Dropped(id),
-                ConnectionEvent::Message(_, Message::KnownPeers(peers)) => {
+                ConnectionEvent::Message(_, Message::Internal(Internal::KnownPeers(peers))) => {
                     log::info!("{}: Received new peers: {:?}", self.node_id, peers);
                     let known_here = self.peers.lock().await;
 
@@ -186,13 +192,20 @@ where
 
     #[allow(dead_code)]
     pub async fn broadcast(&self, notification: N) -> anyhow::Result<()> {
-        self.broadcast_internal(Message::Notification(notification))
-            .await
+        for id in self.connections.active() {
+            self.connections
+                .send_to(&id, Message::Notification(notification.clone()))
+                .await?;
+        }
+
+        Ok(())
     }
 
-    async fn broadcast_internal(&self, message: Message<N, R>) -> anyhow::Result<()> {
+    async fn broadcast_internal(&self, internal: Internal) -> anyhow::Result<()> {
         for id in self.connections.active() {
-            self.connections.send_to(&id, message.clone()).await?;
+            self.connections
+                .send_to(&id, Message::Internal(internal.clone()))
+                .await?;
         }
 
         Ok(())
@@ -212,7 +225,7 @@ where
             .send_to(&id, Message::Request(req_id, req))
             .await?;
 
-        let data = rx.await?;
+        let data = timeout(Duration::from_secs(5), rx).await??;
         let obj = crate::from_slice(&data)?;
         Ok(obj)
     }
@@ -226,6 +239,10 @@ where
             .send_to(&id, Message::Response(request_id, crate::to_vec(&res)?))
             .await?;
         Ok(())
+    }
+
+    pub fn members(&self) -> BTreeSet<NodeId> {
+        self.connections.active().into_iter().collect()
     }
 }
 
@@ -266,7 +283,7 @@ mod tests {
 
     use serial_test::serial;
     use std::net::Ipv4Addr;
-    use tokio::time::{error::Elapsed, *};
+    use tokio::time::error::Elapsed;
 
     const TEN_MS: Duration = Duration::from_millis(10);
 
@@ -418,4 +435,6 @@ mod tests {
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(1)));
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(2)));
     }
+
+    // Dropped removes from ::members
 }

@@ -3,7 +3,6 @@ use super::*;
 use anyhow::Result;
 use dashmap::*;
 use futures::{stream::*, SinkExt};
-use serde::*;
 use std::{
     collections::BTreeSet,
     net::{Ipv4Addr, ToSocketAddrs},
@@ -47,20 +46,6 @@ enum Message {
     NodeId(NodeId),
     Request(u64, Request),
     Response(u64, StringResult<Response>),
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Request {
-    Raft(RaftRequest),
-    Get(String),
-    Write(openraft_storage::LogEntry),
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum RaftRequest {
-    Vote(openraft::types::v070::VoteRequest),
-    ChangeMembership(BTreeSet<NodeId>),
-    AppendEntries(openraft::AppendEntriesRequest<openraft_storage::LogEntry>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
