@@ -4,7 +4,7 @@ use ::futures::*;
 use dashmap::*;
 use serde::de::DeserializeOwned;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     net::{Ipv4Addr, SocketAddr},
 };
 use tokio::{
@@ -243,14 +243,6 @@ where
             .await?;
         Ok(())
     }
-
-    pub fn members(&self) -> BTreeSet<NodeId> {
-        self.connections
-            .active()
-            .into_iter()
-            .chain([self.node_id])
-            .collect()
-    }
 }
 
 async fn handshake(
@@ -443,20 +435,5 @@ mod tests {
 
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(1)));
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(2)));
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn dropped_removes_from_members() {
-        let first = Cluster::new(42, 42000, &[]).await.unwrap();
-        let second = Cluster::new(43, 42001, &[localhost(42000)]).await.unwrap();
-        drain_events(&first).await;
-        drain_events(&second).await;
-
-        drop(second);
-
-        drain_events(&first).await;
-
-        assert!(!first.members().contains(&43));
     }
 }
