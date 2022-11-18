@@ -243,6 +243,10 @@ where
             .await?;
         Ok(())
     }
+
+    pub fn peers(&self) -> impl Iterator<Item = NodeId> {
+        self.connections.active().into_iter()
+    }
 }
 
 async fn handshake(

@@ -9,6 +9,8 @@ use cluster::{Event as ClusterEvent, *};
 mod connections;
 use connections::*;
 
+mod consensus;
+
 pub type NodeId = u64;
 
 pub struct NetworkStore<T: Tree + 'static, C> {
@@ -113,8 +115,17 @@ impl<T: Tree, C: ChunkStore + 'static> Tree for NetworkStore<T, C> {
             return Ok(Some(here));
         }
 
-        log::error!("Unimplemented: remote get");
-        Err(IoError::Unimplemented)
+        for peer in self.cluster.peers() {
+            if let Ok(Some(v)) = self
+                .cluster
+                .request(peer, Request::Get(key.to_string()))
+                .await
+            {
+                return Ok(Some(v));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
