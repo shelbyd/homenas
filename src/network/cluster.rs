@@ -165,15 +165,17 @@ where
                     Event::Request(id, req_id, r)
                 }
                 ConnectionEvent::Message(id, Message::Response(req_id, response)) => {
-                    let responder = match self.pending_requests.remove(&(id, req_id)) {
+                    let (_, responder) = match self.pending_requests.remove(&(id, req_id)) {
                         Some(r) => r,
                         None => {
-                            log::error!("Got unexpected response from peer {}", id);
+                            log::error!("Got unexpected response from peer {id}");
                             continue;
                         }
                     };
-                    if let Err(_) = responder.1.send(response) {
-                        log::error!("{}: Failed to deliver response to request {}", id, req_id);
+                    if let Err(_) = responder.send(response) {
+                        log::error!("{id}: Failed to deliver response to request {req_id}",);
+                    } else {
+                        log::info!("{id}: Sent response to {req_id}");
                     }
                     continue;
                 }
@@ -214,7 +216,6 @@ where
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn request<Res>(&self, id: NodeId, req: R) -> anyhow::Result<Res>
     where
         Res: DeserializeOwned,
@@ -222,6 +223,7 @@ where
         let (tx, rx) = oneshot::channel();
 
         let req_id = rand::random();
+        log::info!("{}: Sending request {id}", self.node_id);
         self.pending_requests.insert((id, req_id), tx);
 
         self.connections
@@ -238,8 +240,17 @@ where
     where
         Res: Serialize,
     {
+        self.respond_raw(id, request_id, crate::to_vec(&res)?).await
+    }
+
+    pub async fn respond_raw(
+        &self,
+        id: NodeId,
+        request_id: u64,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()> {
         self.connections
-            .send_to(&id, Message::Response(request_id, crate::to_vec(&res)?))
+            .send_to(&id, Message::Response(request_id, data))
             .await?;
         Ok(())
     }

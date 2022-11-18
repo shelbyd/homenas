@@ -1,6 +1,6 @@
 use super::*;
 
-use dashmap::*;
+use dashmap::{mapref::entry::Entry, *};
 use futures::future::*;
 use serde::de::DeserializeOwned;
 use std::collections::*;
@@ -21,7 +21,6 @@ pub struct Consensus<T, TP> {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub enum Msg {
     AcquireLease(String, Duration),
-    RefreshLease(String, Duration),
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -66,22 +65,7 @@ where
 
     async fn lease(&self, key: &str) -> IoResult<()> {
         loop {
-            if let Some((node, exp)) = self.current_lease(key) {
-                if node == self.node_id {
-                    let refresh = self
-                        .try_majority::<(), _>(Msg::RefreshLease(
-                            key.to_string(),
-                            self.config.lease_duration,
-                        ))
-                        .await?;
-
-                    if let Err(()) = refresh {
-                        continue;
-                    }
-
-                    return Ok(());
-                }
-
+            if let Some((_, exp)) = self.current_lease(key) {
                 sleep_until(exp).await;
             }
 
@@ -110,10 +94,11 @@ where
     }
 
     fn current_lease(&self, key: &str) -> Option<(NodeId, Instant)> {
-        let entry = self.active_leases.get(key)?;
-        let (node, exp) = entry.value();
+        let entry_locked = self.active_leases.get(key)?;
+        let (node, exp) = entry_locked.value();
 
         if *exp <= Instant::now() {
+            drop(entry_locked);
             self.active_leases.remove(key);
             None
         } else {
@@ -127,8 +112,9 @@ where
         E: DeserializeOwned,
     {
         let members = self.members.read().await.clone();
+        let successes_needed = (members.len() - 1) / 2;
 
-        if members.len() <= 1 {
+        if successes_needed == 0 {
             return Ok(Ok(R::default()));
         }
 
@@ -152,7 +138,7 @@ where
                 Err(err) => failure = Some(err),
             }
 
-            if successes.len() > members.len() / 2 {
+            if successes.len() >= successes_needed {
                 return Ok(Ok(successes.remove(0)));
             }
 
@@ -167,13 +153,23 @@ where
             .unwrap_or_else(|| Err(failure.unwrap()))
     }
 
-    async fn on_message(&self, from: NodeId, message: Msg) -> IoResult<Vec<u8>> {
+    pub async fn on_message(&self, from: NodeId, message: Msg) -> IoResult<Option<Vec<u8>>> {
         match message {
             Msg::AcquireLease(key, dur) => {
-                todo!();
-            }
-            Msg::RefreshLease(key, dur) => {
-                todo!();
+                let result = match self.active_leases.entry(key) {
+                    Entry::Occupied(entry) if entry.get().1 > Instant::now() => {
+                        Err(Leased(entry.get().0, entry.get().1 - Instant::now()))
+                    }
+                    Entry::Occupied(mut can_replace) => {
+                        can_replace.insert((from, Instant::now() + dur));
+                        Ok(())
+                    }
+                    Entry::Vacant(v) => {
+                        v.insert((from, Instant::now() + dur));
+                        Ok(())
+                    }
+                };
+                Ok(Some(crate::to_vec(&result).unwrap()))
             }
         }
     }
@@ -196,7 +192,8 @@ impl<T: Tree, TP: Transport> Tree for Consensus<T, TP> {
         old: Option<&[u8]>,
         new: Option<&[u8]>,
     ) -> IoResult<Result<(), CompareAndSwapError>> {
-        unimplemented!("compare_and_swap");
+        self.lease(key).await?;
+        self.backing.compare_and_swap(key, old, new).await
     }
 }
 
@@ -218,77 +215,3 @@ impl Default for Config {
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     use dashmap::*;
-//     use maplit::*;
-//     use tokio::{sync::oneshot, time::*};
-//
-//     #[derive(Default)]
-//     struct TestTransport {
-//         messages: DashMap<Msg, oneshot::Sender<Vec<u8>>>,
-//     }
-//
-//     #[async_trait::async_trait]
-//     impl Transport for TestTransport {
-//         async fn request<R: DeserializeOwned>(&self, msg: Msg) -> IoResult<R> {
-//             let (tx, rx) = oneshot::channel();
-//             self.messages.insert(msg, tx);
-//
-//             futures::future::pending::<()>().await;
-//             todo!();
-//         }
-//     }
-//
-//     #[cfg(test)]
-//     mod single_node {
-//         use super::*;
-//
-//         #[tokio::test]
-//         async fn single_node_reads_from_local() {
-//             let mem = MemoryTree::default();
-//             let subject = Consensus::new(10, &mem, TestTransport::default());
-//
-//             mem.set("foo", Some(&[1, 2, 3])).await.unwrap();
-//
-//             assert_eq!(subject.get("foo").await, Ok(Some(vec![1, 2, 3])));
-//         }
-//
-//         #[tokio::test]
-//         async fn set_sets_in_backing() {
-//             let mem = MemoryTree::default();
-//             let subject = Consensus::new(10, &mem, TestTransport::default());
-//
-//             let _ = subject.set("foo", Some(&[1, 2, 3])).await;
-//
-//             assert_eq!(mem.get("foo").await, Ok(Some(vec![1, 2, 3])));
-//         }
-//     }
-//
-//     #[cfg(test)]
-//     mod three_nodes {
-//         use super::*;
-//
-//         #[tokio::test]
-//         async fn set_acquires_lease() {
-//             let mem = MemoryTree::default();
-//             let transport = TestTransport::default();
-//
-//             let subject = Consensus::new(10, &mem, &transport);
-//             subject.set_members(btreeset! { 10, 11, 12 }).await;
-//
-//             let _ = timeout(
-//                 Duration::from_millis(1),
-//                 subject.set("foo", Some(&[1, 2, 3])),
-//             )
-//             .await;
-//
-//             assert!(transport
-//                 .messages
-//                 .contains_key(&Msg::TryAcquireLease("foo".to_string())));
-//         }
-//     }
-// }
