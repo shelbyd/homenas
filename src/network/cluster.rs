@@ -6,6 +6,7 @@ use serde::de::DeserializeOwned;
 use std::{
     collections::BTreeMap,
     net::{Ipv4Addr, SocketAddr},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::{
     net::*,
@@ -31,6 +32,8 @@ pub struct Cluster<N, R> {
     peers: Mutex<BTreeMap<NodeId, SocketAddr>>,
 
     handshake_tx: UnboundedSender<(SocketAddr, Option<TcpStream>)>,
+
+    next_request_id: AtomicU64,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -72,7 +75,6 @@ where
     N: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    #[allow(dead_code)]
     pub async fn new(
         node_id: NodeId,
         listen_on: u16,
@@ -137,14 +139,16 @@ where
             pending_requests: DashMap::default(),
             peers: Mutex::default(),
             handshake_tx,
+            next_request_id: AtomicU64::new(0),
         })
     }
 
-    #[allow(dead_code)]
     pub async fn next_event(&self) -> Event<N, R> {
         loop {
             return match self.connections.next_event().await {
                 ConnectionEvent::NewConnection(id, addr) => {
+                    log::info!("New connection with peer {id} @ {addr}");
+
                     let mut peers = self.peers.lock().await;
                     peers.insert(id, addr);
                     let peers = peers.clone();
@@ -155,6 +159,7 @@ where
                     Event::NewConnection(id)
                 }
                 ConnectionEvent::Dropped(id) => {
+                    log::info!("Connection closed with peer {id}");
                     self.peers.lock().await.remove(&id);
                     Event::Dropped(id)
                 }
@@ -173,9 +178,7 @@ where
                         }
                     };
                     if let Err(_) = responder.send(response) {
-                        log::error!("{id}: Failed to deliver response to request {req_id}",);
-                    } else {
-                        log::info!("{id}: Sent response to {req_id}");
+                        log::warn!("{id}: Failed to deliver response to request {req_id}",);
                     }
                     continue;
                 }
@@ -222,8 +225,7 @@ where
     {
         let (tx, rx) = oneshot::channel();
 
-        let req_id = rand::random();
-        log::info!("{}: Sending request {id}", self.node_id);
+        let req_id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
         self.pending_requests.insert((id, req_id), tx);
 
         self.connections
@@ -235,7 +237,6 @@ where
         Ok(obj)
     }
 
-    #[allow(dead_code)]
     pub async fn respond<Res>(&self, id: NodeId, request_id: u64, res: Res) -> anyhow::Result<()>
     where
         Res: Serialize,

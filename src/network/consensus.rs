@@ -21,6 +21,8 @@ pub struct Consensus<T, TP> {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub enum Msg {
     AcquireLease(String, Duration),
+    Get(String),
+    Set(String, Option<Vec<u8>>),
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -43,9 +45,9 @@ pub trait Transport: Send + Sync {
 
 impl<T, TP> Consensus<T, TP>
 where
+    T: Tree,
     TP: Transport,
 {
-    #[allow(dead_code)]
     pub fn new(node_id: NodeId, backing: T, transport: TP) -> Self {
         Consensus {
             node_id,
@@ -58,7 +60,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub async fn set_members(&self, members: BTreeSet<NodeId>) {
         *self.members.write().await = members;
     }
@@ -171,6 +172,15 @@ where
                 };
                 Ok(Some(crate::to_vec(&result).unwrap()))
             }
+            Msg::Get(key) => {
+                let found: Option<Vec<u8>> = self.backing.get(&key).await?;
+                Ok(Some(crate::to_vec(&found).unwrap()))
+            }
+            Msg::Set(key, value) => {
+                self.backing.set(&key, opt_slice(&value)).await?;
+                let result: Result<(), ()> = Ok(());
+                Ok(Some(crate::to_vec(&result).unwrap()))
+            }
         }
     }
 }
@@ -178,12 +188,38 @@ where
 #[async_trait::async_trait]
 impl<T: Tree, TP: Transport> Tree for Consensus<T, TP> {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>> {
-        self.backing.get(key).await
+        if let Some(data) = self.backing.get(key).await? {
+            return Ok(Some(data));
+        }
+
+        for &to in &*self.members.read().await {
+            if to == self.node_id {
+                continue;
+            }
+
+            if let Some(Some(data)) =
+                log_err!(self.transport.request(to, Msg::Get(key.to_string())).await)
+            {
+                log::info!("Found {key} on peer {to}");
+                return Ok(Some(data));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()> {
         self.lease(key).await?;
-        self.backing.set(key, value).await
+
+        match self
+            .try_majority(Msg::Set(key.to_string(), opt_vec(value)))
+            .await?
+        {
+            Ok(()) => {}
+            Err(()) => unimplemented!(),
+        }
+
+        Ok(())
     }
 
     async fn compare_and_swap(
@@ -193,7 +229,22 @@ impl<T: Tree, TP: Transport> Tree for Consensus<T, TP> {
         new: Option<&[u8]>,
     ) -> IoResult<Result<(), CompareAndSwapError>> {
         self.lease(key).await?;
-        self.backing.compare_and_swap(key, old, new).await
+        match self.backing.compare_and_swap(key, old, new).await? {
+            Ok(()) => {}
+            Err(e) => return Ok(Err(e)),
+        }
+
+        match self
+            .try_majority(Msg::Set(key.to_string(), opt_vec(new)))
+            .await?
+        {
+            Ok(()) => {
+                log::info!("Replicated CAS {key} to majority");
+            }
+            Err(()) => unimplemented!(),
+        }
+
+        Ok(Ok(()))
     }
 }
 

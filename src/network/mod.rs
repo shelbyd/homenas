@@ -28,7 +28,7 @@ enum Event {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    Get(String),
+    ReadChunk(String),
     Consensus(consensus::Msg),
 }
 
@@ -117,9 +117,9 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
         };
 
         match request {
-            Request::Get(key) => {
+            Request::ReadChunk(id) => {
                 self.cluster
-                    .respond::<Option<Vec<u8>>>(peer_id, req_id, self.get(&key).await?)
+                    .respond(peer_id, req_id, self.backing_chunks.read(&id).await.ok())
                     .await?;
             }
             Request::Consensus(msg) => {
@@ -156,7 +156,24 @@ impl<T: Tree, C: ChunkStore + 'static> Tree for NetworkStore<T, C> {
 #[async_trait::async_trait]
 impl<T: Tree, C: ChunkStore> ChunkStore for NetworkStore<T, C> {
     async fn read(&self, id: &str) -> IoResult<Vec<u8>> {
-        self.backing_chunks.read(id).await
+        if let Ok(data) = self.backing_chunks.read(id).await {
+            return Ok(data);
+        }
+
+        for peer in self.cluster.peers() {
+            log::info!("{id}: Checking peer {peer}");
+            if let Some(Some(data)) = log_err!(
+                self.cluster
+                    .request(peer, Request::ReadChunk(id.to_string()))
+                    .await
+            ) {
+                log::info!("{id}: Found on peer {peer}");
+                return Ok(data);
+            }
+        }
+
+        log::info!("{id}: Not found");
+        Err(IoError::NotFound)
     }
 
     async fn store(&self, chunk: &[u8]) -> IoResult<String> {
@@ -164,6 +181,8 @@ impl<T: Tree, C: ChunkStore> ChunkStore for NetworkStore<T, C> {
     }
 
     async fn store_at(&self, chunk: &[u8], location: &Location) -> IoResult<String> {
+        log::warn!("TODO(shelbyd): Implement.");
+
         self.backing_chunks.store_at(chunk, location).await
     }
 

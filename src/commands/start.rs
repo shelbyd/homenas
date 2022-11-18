@@ -79,6 +79,8 @@ impl StartCommand {
         }
         crate::operating_system::mount(fs, &self.mount_path)?;
 
+        log::info!("operating_system::mount finished, terminating");
+
         Ok(())
     }
 }
