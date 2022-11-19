@@ -24,6 +24,7 @@ pub trait Transport: Send + Sync {
     async fn request<R: DeserializeOwned>(&self, peer: NodeId, message: Msg) -> IoResult<R>;
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Msg {
     Set(String, Option<Vec<u8>>),
     Get(String),
@@ -221,7 +222,6 @@ mod tests {
     use super::{Transport, *};
 
     use std::{collections::HashMap, sync::Weak};
-    use tokio::time::*;
 
     type ConsensusTreeBound = ConsensusTree<MemoryTree, TestTransport>;
 

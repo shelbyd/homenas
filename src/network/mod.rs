@@ -9,17 +9,15 @@ use cluster::{Event as ClusterEvent, *};
 mod connections;
 use connections::*;
 
-mod consensus;
-use consensus::*;
-
 mod consensus_tree;
+use consensus_tree::*;
 
 pub type NodeId = u64;
 
 pub struct NetworkStore<T: Tree + 'static, C> {
     backing_chunks: C,
     cluster: Arc<Cluster<Event, Request>>,
-    consensus: Consensus<T, ConsensusTransport>,
+    consensus: ConsensusTree<T, ConsensusTransport>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -31,7 +29,7 @@ enum Event {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
     ReadChunk(String),
-    Consensus(consensus::Msg),
+    Consensus(consensus_tree::Msg),
 }
 
 struct ConsensusTransport {
@@ -63,7 +61,7 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
 
         let cluster = Arc::new(Cluster::new(node_id, listen_on, peers).await?);
 
-        let consensus = Consensus::new(
+        let consensus = ConsensusTree::new(
             node_id,
             backing_tree,
             ConsensusTransport {
@@ -102,13 +100,8 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
     ) -> anyhow::Result<()> {
         let (peer_id, req_id, request) = match event {
             ClusterEvent::NewConnection(_) | ClusterEvent::Dropped(_) => {
-                let members = self
-                    .cluster
-                    .peers()
-                    .into_iter()
-                    .chain([self.cluster.node_id])
-                    .collect();
-                self.consensus.set_members(members).await;
+                let members = self.cluster.peers().into_iter().collect();
+                self.consensus.set_peers(members).await;
                 return Ok(());
             }
             ClusterEvent::Request(peer_id, req_id, request) => (peer_id, req_id, request),
@@ -125,9 +118,8 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
                     .await?;
             }
             Request::Consensus(msg) => {
-                if let Some(response) = self.consensus.on_message(peer_id, msg).await? {
-                    self.cluster.respond_raw(peer_id, req_id, response).await?;
-                }
+                let response = self.consensus.on_message(peer_id, msg).await?;
+                self.cluster.respond_raw(peer_id, req_id, response).await?;
             }
         }
 
