@@ -60,7 +60,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub async fn set_peers(&self, peers: HashSet<NodeId>) {
+    pub async fn set_peers(&self, peers: impl IntoIterator<Item = NodeId>) {
         *self.peers.write().await = peers.into_iter().filter(|&n| n != self.node_id).collect();
     }
 
@@ -328,9 +328,8 @@ mod tests {
 
             self.nodes.insert(node_id, Arc::clone(&tree));
 
-            let peers: HashSet<_> = self.nodes.keys().cloned().collect();
             for node in self.nodes.values() {
-                node.set_peers(peers.clone()).await;
+                node.set_peers(self.nodes.keys().cloned()).await;
             }
 
             self.transport

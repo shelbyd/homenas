@@ -2,7 +2,7 @@ use crate::{chunk_store::*, db::*, io::*, log_err, utils::*};
 
 use futures::future::*;
 use serde::{de::DeserializeOwned, *};
-use std::{net::SocketAddr, path::Path, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 mod cluster;
 use cluster::{Event as ClusterEvent, *};
@@ -44,21 +44,8 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
         backing_chunks: C,
         listen_on: u16,
         peers: &[SocketAddr],
-        state_dir: impl AsRef<Path>,
     ) -> anyhow::Result<Arc<Self>> {
-        let state_dir = state_dir.as_ref();
-        crate::ensure_dir_exists(state_dir).await?;
-        let sled = sled::open(state_dir)?;
-
-        let node_id = sled
-            .update_and_fetch("node_id", |existing| {
-                Some(
-                    opt_vec(existing)
-                        .unwrap_or_else(|| crate::to_vec::<u64>(&rand::random()).unwrap()),
-                )
-            })?
-            .unwrap();
-        let node_id = crate::from_slice(&node_id)?;
+        let node_id = rand::random();
         log::info!("Current node id: {node_id}");
 
         let cluster = Arc::new(Cluster::new(node_id, listen_on, peers).await?);
@@ -103,7 +90,7 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
     ) -> anyhow::Result<()> {
         let (peer_id, req_id, request) = match event {
             ClusterEvent::NewConnection(_) | ClusterEvent::Dropped(_) => {
-                let members = self.cluster.peers().into_iter().collect();
+                let members = self.cluster.peers();
                 self.consensus.set_peers(members).await;
                 return Ok(());
             }

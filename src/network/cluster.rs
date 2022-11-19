@@ -153,7 +153,6 @@ where
                     peers.insert(id, addr);
                     let peers = peers.clone();
 
-                    log::info!("{}: Broadcasting new peers: {:?}", self.node_id, peers);
                     log_err!(self.broadcast_internal(Internal::KnownPeers(peers)).await);
 
                     Event::NewConnection(id)
@@ -183,7 +182,6 @@ where
                     continue;
                 }
                 ConnectionEvent::Message(_, Message::Internal(Internal::KnownPeers(peers))) => {
-                    log::info!("{}: Received new peers: {:?}", self.node_id, peers);
                     let known_here = self.peers.lock().await;
 
                     for (id, addr) in peers {

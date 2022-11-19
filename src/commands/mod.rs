@@ -27,7 +27,6 @@ pub fn create_smart_start() -> StartCommand {
         peers: Vec::new(),
         backing_dir: smart_backing_dirs(),
         fail_on_existing_mount: false,
-        network_state_dir: None,
         mount_path: crate::operating_system::default_mount_path(),
     }
 }

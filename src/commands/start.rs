@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use structopt::*;
 
-use crate::{chunk_store::*, db::*, PROJECT_DIRS, *};
+use crate::{chunk_store::*, db::*, *};
 
 #[derive(StructOpt, Debug)]
 pub struct StartCommand {
@@ -21,9 +21,6 @@ pub struct StartCommand {
     /// By default, clear existing mount before trying to mount. If provided, will just try to
     /// mount without clearing first.
     pub(crate) fail_on_existing_mount: bool,
-
-    #[structopt(long)]
-    pub(crate) network_state_dir: Option<PathBuf>,
 
     /// Where to mount the homenas directory.
     pub(crate) mount_path: PathBuf,
@@ -48,25 +45,16 @@ impl StartCommand {
 
         let chunk_store: Box<dyn ChunkStore> = match &self.backing_dir[..] {
             [] => Box::new(MemChunkStore::default()),
-            [single] => Box::new(FsChunkStore::new(single)?),
+            [single] => Box::new(FsChunkStore::new(single.join("chunks"))?),
             [dirs @ ..] => Box::new(crate::chunk_store::Multi::new(
                 dirs.iter()
-                    .map(FsChunkStore::new)
+                    .map(|dir| FsChunkStore::new(dir.join("chunks")))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
         };
 
-        let store = NetworkStore::create(
-            Arc::new(tree),
-            chunk_store,
-            self.listen_on,
-            &self.peers,
-            self.network_state_dir
-                .as_ref()
-                .map(PathBuf::as_path)
-                .unwrap_or(PROJECT_DIRS.data_dir()),
-        )
-        .await?;
+        let store =
+            NetworkStore::create(Arc::new(tree), chunk_store, self.listen_on, &self.peers).await?;
 
         let chunk_store = Arc::clone(&store);
         let chunk_store = Striping::new(chunk_store, Arc::clone(&store));
