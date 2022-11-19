@@ -12,6 +12,8 @@ use connections::*;
 mod consensus;
 use consensus::*;
 
+mod consensus_tree;
+
 pub type NodeId = u64;
 
 pub struct NetworkStore<T: Tree + 'static, C> {

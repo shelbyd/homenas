@@ -16,7 +16,6 @@ pub use self::typed::*;
 pub trait Tree: Send + Sync {
     async fn get(&self, key: &str) -> IoResult<Option<Vec<u8>>>;
 
-    // TODO(shelbyd): Replace with clear.
     async fn set(&self, key: &str, value: Option<&[u8]>) -> IoResult<()>;
 
     async fn compare_and_swap(
