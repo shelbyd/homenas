@@ -437,4 +437,6 @@ mod tests {
 
         assert_eq!(cluster.nodes[&0].get_typed("count").await, Ok(Some(total)));
     }
+
+    // TODO(shelbyd): Prevent stale read after disconnected from network.
 }
