@@ -67,6 +67,7 @@ impl<T: Tree + Clone + 'static, C: ChunkStore + 'static> NetworkStore<T, C> {
             ConsensusTransport {
                 cluster: Arc::clone(&cluster),
             },
+            consensus_tree::Config::default(),
         );
         let network_store = Arc::new(NetworkStore {
             backing_chunks,

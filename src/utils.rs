@@ -88,3 +88,24 @@ pub fn diff<T: PartialEq>(a: T, b: T) -> Option<(T, T)> {
         Some((a, b))
     }
 }
+
+#[derive(Default)]
+pub struct NotifyOnDrop {
+    wakers: Vec<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl NotifyOnDrop {
+    pub fn push(&mut self) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.wakers.push(tx);
+        rx
+    }
+}
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        for waker in self.wakers.drain(..) {
+            let _ = waker.send(());
+        }
+    }
+}
