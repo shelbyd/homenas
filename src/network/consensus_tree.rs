@@ -68,6 +68,8 @@ where
     pub async fn on_message(&self, from: NodeId, message: Msg) -> IoResult<Vec<u8>> {
         match message {
             Msg::Set(key, value) => {
+                log::info!("Received set on {key:?}");
+
                 // TODO(shelbyd): Protect with lock?
                 self.backing.set(&key, opt_slice(&value)).await?;
                 Ok(crate::to_vec(&()).unwrap())
@@ -266,7 +268,7 @@ impl Lock {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            unlock_after_idle: Duration::from_millis(250),
+            unlock_after_idle: Duration::from_millis(1000),
         }
     }
 }

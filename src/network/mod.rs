@@ -130,9 +130,8 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
                     .await?;
             }
             Request::Drop(id) => {
-                self.cluster
-                    .respond::<()>(peer_id, req_id, self.backing_chunks.drop(&id).await?)
-                    .await?;
+                let _dropped = self.backing_chunks.drop(&id).await.into_found()?;
+                self.cluster.respond(peer_id, req_id, ()).await?;
             }
         }
 

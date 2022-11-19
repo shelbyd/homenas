@@ -5,6 +5,7 @@ use dashmap::*;
 use serde::de::DeserializeOwned;
 use std::{
     collections::BTreeMap,
+    io::ErrorKind,
     net::{Ipv4Addr, SocketAddr},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -267,7 +268,20 @@ async fn handshake(
 ) -> anyhow::Result<HandshakeSuccess> {
     let connection = match connection {
         Some(c) => c,
-        None => TcpStream::connect(addr).await?,
+        None => {
+            timeout(Duration::from_secs(5), async move {
+                loop {
+                    match TcpStream::connect(addr).await {
+                        Ok(s) => break Ok(s),
+                        Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
+                            sleep(Duration::from_millis(10)).await;
+                        }
+                        Err(e) => break Err(e),
+                    }
+                }
+            })
+            .await??
+        }
     };
 
     let mut connection = Codec::new().framed(connection);
@@ -450,5 +464,22 @@ mod tests {
 
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(1)));
         assert_eq!(timeout_event(&last).await, Ok(Event::NewConnection(2)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn gives_some_time_for_peer_to_come_online() {
+        let first_port = 42001;
+
+        let second = Cluster::new(2, 42002, &[localhost(first_port)])
+            .await
+            .unwrap();
+
+        sleep(Duration::from_millis(2)).await;
+
+        let first = Cluster::new(1, first_port, &[]).await.unwrap();
+        spawn(loop_events(first));
+
+        assert_eq!(timeout_event(&second).await, Ok(Event::NewConnection(1)));
     }
 }
