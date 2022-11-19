@@ -219,6 +219,7 @@ where
         Ok(())
     }
 
+    // TODO(shelbyd): Return IoResult.
     pub async fn request<Res>(&self, id: NodeId, req: R) -> anyhow::Result<Res>
     where
         Res: DeserializeOwned,

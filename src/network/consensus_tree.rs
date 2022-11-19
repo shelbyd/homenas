@@ -1,7 +1,6 @@
 use super::*;
 
 use dashmap::{mapref::entry::Entry, *};
-use futures::future::*;
 use tokio::{sync::RwLock, time::*};
 
 pub struct ConsensusTree<T, TP> {
@@ -409,6 +408,7 @@ mod tests {
         assert_eq!(cluster.nodes[&2].get("foo").await, Ok(Some(vec![1, 2, 3])));
     }
 
+    // TODO(shelbyd): This has failed sometimes?
     #[test_log::test(tokio::test)]
     async fn compare_exchange_increments_atomically() {
         let cluster = Arc::new(Cluster::sized(5).await);

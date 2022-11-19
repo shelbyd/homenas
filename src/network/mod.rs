@@ -1,5 +1,6 @@
 use crate::{chunk_store::*, db::*, io::*, log_err, utils::*};
 
+use futures::future::*;
 use serde::{de::DeserializeOwned, *};
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
@@ -21,15 +22,16 @@ pub struct NetworkStore<T: Tree + 'static, C> {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-enum Event {
-    Set(String, Option<Vec<u8>>),
-    CompareAndSwap(String, Option<Vec<u8>>, Option<Vec<u8>>),
-}
+enum Event {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    ReadChunk(String),
     Consensus(consensus_tree::Msg),
+
+    Locations,
+    ReadChunk(String),
+    StoreChunkAt(Vec<u8>, Location),
+    Drop(String),
 }
 
 struct ConsensusTransport {
@@ -106,21 +108,44 @@ impl<C: ChunkStore + 'static, T: Tree> NetworkStore<T, C> {
                 return Ok(());
             }
             ClusterEvent::Request(peer_id, req_id, request) => (peer_id, req_id, request),
-            unhandled => {
-                log::error!("Unhandled: {:?}", unhandled);
-                std::process::exit(1);
-            }
+            ClusterEvent::Notification(_peer_id, event) => match event {},
         };
 
+        // TODO(shelbyd): Pass errors back to requester.
         match request {
+            Request::Consensus(msg) => {
+                let response = self.consensus.on_message(peer_id, msg).await?;
+                self.cluster.respond_raw(peer_id, req_id, response).await?;
+            }
+
+            Request::Locations => {
+                self.cluster
+                    .respond::<HashSet<Location>>(
+                        peer_id,
+                        req_id,
+                        self.backing_chunks.locations().await?,
+                    )
+                    .await?;
+            }
+
+            Request::StoreChunkAt(chunk, location) => {
+                self.cluster
+                    .respond::<String>(
+                        peer_id,
+                        req_id,
+                        self.backing_chunks.store_at(&chunk, &location).await?,
+                    )
+                    .await?;
+            }
             Request::ReadChunk(id) => {
                 self.cluster
                     .respond(peer_id, req_id, self.backing_chunks.read(&id).await.ok())
                     .await?;
             }
-            Request::Consensus(msg) => {
-                let response = self.consensus.on_message(peer_id, msg).await?;
-                self.cluster.respond_raw(peer_id, req_id, response).await?;
+            Request::Drop(id) => {
+                self.cluster
+                    .respond::<()>(peer_id, req_id, self.backing_chunks.drop(&id).await?)
+                    .await?;
             }
         }
 
@@ -176,17 +201,62 @@ impl<T: Tree, C: ChunkStore> ChunkStore for NetworkStore<T, C> {
     }
 
     async fn store_at(&self, chunk: &[u8], location: &Location) -> IoResult<String> {
-        log::warn!("TODO(shelbyd): Implement.");
+        if self.backing_chunks.locations().await?.contains(location) {
+            return self.backing_chunks.store_at(chunk, location).await;
+        }
 
-        self.backing_chunks.store_at(chunk, location).await
+        for peer in self.cluster.peers() {
+            let locations: HashSet<Location> =
+                log_err!(self.cluster.request(peer, Request::Locations).await)
+                    .ok_or(IoError::Internal)?;
+            if locations.contains(location) {
+                return log_err!(
+                    self.cluster
+                        .request::<String>(
+                            peer,
+                            Request::StoreChunkAt(chunk.to_vec(), location.clone())
+                        )
+                        .await
+                )
+                .ok_or(IoError::Internal);
+            }
+        }
+
+        Err(IoError::NotFound)
     }
 
     async fn drop(&self, id: &str) -> IoResult<()> {
-        self.backing_chunks.drop(id).await
+        // TODO(shelbyd): Drop as Event.
+        self.backing_chunks.drop(id).await?;
+
+        let futs = self.cluster.peers().into_iter().map(|peer| async move {
+            log_err!(
+                self.cluster
+                    .request::<()>(peer, Request::Drop(id.to_string()))
+                    .await
+            )
+            .ok_or(IoError::Internal)
+        });
+        join_all(futs).await.into_iter().collect()
     }
 
     async fn locations(&self) -> IoResult<HashSet<Location>> {
-        self.backing_chunks.locations().await
+        let local = self.backing_chunks.locations().await?;
+
+        let futs = self.cluster.peers().into_iter().map(|peer| async move {
+            log_err!(
+                self.cluster
+                    .request::<HashSet<_>>(peer, Request::Locations)
+                    .await
+            )
+            .ok_or(IoError::Internal)
+        });
+        Ok(try_join_all(futs)
+            .await?
+            .into_iter()
+            .flat_map(|h| h)
+            .chain(local)
+            .collect())
     }
 }
 
